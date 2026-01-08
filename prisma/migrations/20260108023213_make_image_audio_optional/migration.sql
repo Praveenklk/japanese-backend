@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Katakana" ALTER COLUMN "audioUrl" DROP NOT NULL,
+ALTER COLUMN "imageUrl" DROP NOT NULL;
