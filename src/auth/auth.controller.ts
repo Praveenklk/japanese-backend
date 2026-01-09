@@ -28,13 +28,13 @@ export class AuthController {
       dto.password,
     );
 
-    // OPTIONAL: auto-login after register
     const token = this.authService.login(user);
 
+    // ✅ PRODUCTION COOKIE CONFIG
     res.cookie('access_token', token, {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: false, // true in prod
+      secure: true,        // REQUIRED (HTTPS)
+      sameSite: 'none',    // REQUIRED (cross-site)
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -57,26 +57,33 @@ export class AuthController {
 
     const token = this.authService.login(user);
 
+    // ✅ PRODUCTION COOKIE CONFIG
     res.cookie('access_token', token, {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: false,
+      secure: true,        // REQUIRED (HTTPS)
+      sameSite: 'none',    // REQUIRED (cross-site)
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     return { message: 'Login successful' };
   }
 
-  @Get("me")
-@UseGuards(JwtAuthGuard)
-getMe(@Req() req: any) {
-  return req.user;}
+  // ME
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  getMe(@Req() req: any) {
+    return req.user;
+  }
 
   // LOGOUT
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie('access_token');
+    res.clearCookie('access_token', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+    });
     return { message: 'Logged out' };
   }
 }

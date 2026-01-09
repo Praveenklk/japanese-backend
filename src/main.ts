@@ -8,12 +8,16 @@ async function bootstrap() {
   // ✅ Enable cookies
   app.use(cookieParser());
 
+  // ✅ TRUST PROXY (Railway fix)
+  const server = app.getHttpAdapter().getInstance();
+  server.set('trust proxy', 1);
+
   // ✅ CORS (local + production)
   app.enableCors({
     origin: [
-      'http://localhost:5173',                 // local dev
-      process.env.FRONTEND_URL,               // production (Vercel)
-    ].filter(Boolean), // removes undefined
+      'http://localhost:5173',
+      process.env.FRONTEND_URL, // https://japanese-frontend-iota.vercel.app
+    ].filter(Boolean),
     credentials: true,
   });
 
