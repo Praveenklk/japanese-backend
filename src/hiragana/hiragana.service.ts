@@ -57,6 +57,16 @@ async create(dto: CreateHiraganaDto, imageUrl?: string) {
   }
 
 
+  async updateReadStatus(id: string, isRead: boolean) {
+  await this.findOne(id); // reuse existing method
+
+  return this.prisma.hiragana.update({
+    where: { id },
+    data: { isRead },
+  });
+}
+
+
   // CREATE MANY
 async createMany(dtos: CreateHiraganaDto[]) {
   try {

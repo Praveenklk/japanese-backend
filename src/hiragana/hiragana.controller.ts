@@ -16,6 +16,7 @@ import { CreateHiraganaDto } from './dto/create-hiragana.dto';
 import { UpdateHiraganaDto } from './dto/update-hiragana.dto';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { CreateManyHiraganaDto } from './dto/create-many-hiragana.dto';
+import { UpdateReadStatusDto } from './dto/update-read-status.dto';
 
 @Controller('hiragana')
 export class HiraganaController {
@@ -50,6 +51,14 @@ async create(
     return this.hiraganaService.findAll();
   }
 
+  @Patch(':id/read-status')
+updateReadStatus(
+  @Param('id') id: string,
+  @Body() dto: UpdateReadStatusDto,
+) {
+  return this.hiraganaService.updateReadStatus(id, dto.isRead);
+}
+
   // READ ONE
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -78,9 +87,12 @@ async update(
 }
 
 @Post('bulk')
-async createMany(@Body() dto: CreateManyHiraganaDto) {
-  return this.hiraganaService.createMany(dto.items);
+createMany(@Body() body: any) {
+  console.log('RAW BODY:', body);
+  console.log('IS ARRAY:', Array.isArray(body));
+  return this.hiraganaService.createMany(body);
 }
+
 
 
   // DELETE

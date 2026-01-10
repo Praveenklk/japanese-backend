@@ -22,9 +22,10 @@ export class KatakanaController {
   }
 
 @Post('bulk')
-createMany(@Body() dto: CreateManyKatakanaDto) {
-  return this.katakanaService.createMany(dto.data);
+createMany(@Body() data: CreateKatakanaDto[]) {
+  return this.katakanaService.createMany(data);
 }
+
 
   
   

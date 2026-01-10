@@ -13,10 +13,10 @@ export class KatakanaService {
     });
   }
 
-  createMany(data: CreateKatakanaDto[]) {
+createMany(data: CreateKatakanaDto[]) {
   return this.prisma.katakana.createMany({
     data,
-    skipDuplicates: true, // optional but recommended
+    skipDuplicates: true,
   });
 }
 
