@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HiraganaModule } from './hiragana/hiragana.module';
 import { AuthModule } from './auth/auth.module';
 import { KatakanaModule } from './katakana/katakana.module';
+import { VocabularyModule } from './vocabulary/vocabulary.module';
 
 @Module({
   imports: [
@@ -15,7 +16,8 @@ import { KatakanaModule } from './katakana/katakana.module';
     PrismaModule,
     AuthModule,
      HiraganaModule,
-     KatakanaModule
+     KatakanaModule,
+     VocabularyModule
   ],
   controllers: [AppController],
   providers: [AppService],

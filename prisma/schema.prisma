@@ -62,18 +62,56 @@ enum Role {
  * Vocabulary words (JLPT based)
  */
 model Vocabulary {
-  id          String  @id @default(uuid())
-  word        String // たべます
-  meaning     String // eat
-  explanation String // polite verb form
-  example     String // パンを たべます。
-  level       JLPT    @default(N5)
-  imageUrl    String? // Cloudinary URL
-  audioUrl    String? // /audio/vocab/tabemasu.mp3
-  isRead      Boolean @default(false)
+  id               String   @id @default(uuid())
 
-  createdAt DateTime @default(now())
+  // Core word data
+  japanese         String   // こんにちは
+  reading          String   // Konnichiwa
+  english          String   // Hello / Good afternoon
+
+  // Organization
+  category         String   // greetings, food, verbs, etc.
+  difficulty       Difficulty @default(BEGINNER)
+  jlptLevel        JLPT       @default(N5)
+  tags             String[]   @default([])
+  lessonNumber Int?
+  explanation String? // 👈 ADD THIS
+
+
+  // Usage examples
+  example          String   // こんにちは、お元気ですか？
+  exampleReading   String   // Konnichiwa, ogenki desu ka?
+  exampleEnglish   String   // Hello, how are you?
+
+  // Media
+  imageUrl         String?
+  audioUrl         String?
+  pitchAccent      String?  // optional (later use)
+
+  // Learning state
+  isLearned        Boolean  @default(false)
+  isBookmarked     Boolean  @default(false)
+
+  // Review statistics
+  reviews          Int      @default(0)
+  correctCount     Int      @default(0)
+  incorrectCount   Int      @default(0)
+  streak           Int      @default(0)
+
+  // Anki / Spaced repetition core
+  lastReviewedAt   DateTime?
+  nextReviewAt     DateTime? @default(now())
+  intervalDays     Int      @default(1)    // 1, 3, 7, 15...
+  easeFactor       Float    @default(2.5)  // SM-2 base
+
+  // System
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([nextReviewAt])
+  @@index([jlptLevel, difficulty])
 }
+
 
 /**
  * JLPT Levels
@@ -82,4 +120,10 @@ enum JLPT {
   N5
   N4
   N3
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
 }
