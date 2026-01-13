@@ -112,6 +112,101 @@ model Vocabulary {
   @@index([jlptLevel, difficulty])
 }
 
+model Kanji {
+  id               String   @id @default(uuid())
+
+  // Identity
+  character        String   @unique // 日
+  meaning          String   // Sun, Day
+
+  // Readings
+  onyomi           String[] // ニチ, ジツ
+  kunyomi          String[] // ひ, か
+
+  // Structure
+  strokes          Int
+  radicals         String[]
+
+  jlptLevel        JLPT     @default(N5)
+
+  // Learning aids
+  explanation      String?  // definition / notes
+  memoryStory      String?  // mnemonic / visual story
+  aiHint           String?  // AI-generated tip (optional)
+
+  // Relations
+  words            KanjiWord[]
+  sentences        KanjiSentence[]
+
+  // Learning state (global – per-user later)
+  status           KanjiStatus @default(NEW)
+  isBookmarked     Boolean     @default(false)
+
+  // Review statistics
+  reviewCount      Int      @default(0)
+  correctCount     Int      @default(0)
+  incorrectCount   Int      @default(0)
+  streak           Int      @default(0)
+
+  // SRS (SM-2 based)
+  lastReviewedAt   DateTime?
+  nextReviewAt     DateTime? @default(now())
+  intervalDays     Int      @default(1)
+  easeFactor       Float    @default(2.5)
+
+  // Writing practice
+  strokeOrderSvg   String?
+  strokeOrderGif   String?
+
+  // Metadata
+  frequencyRank    Int?     // commonness in Japanese
+  gradeLevel       Int?     // Japanese school grade
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([jlptLevel])
+  @@index([nextReviewAt])
+  @@index([frequencyRank])
+}
+
+model KanjiWord {
+  id        String @id @default(uuid())
+
+  word      String   // 日本
+  reading   String   // にほん
+  meaning   String   // Japan
+
+  kanjiId   String
+  kanji     Kanji @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([kanjiId])
+}
+
+model KanjiSentence {
+  id        String @id @default(uuid())
+
+  sentence  String   // 今日はいい日です。
+  reading   String   // きょうはいいひです。
+  meaning   String   // Today is a good day.
+
+  kanjiId   String
+  kanji     Kanji @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([kanjiId])
+}
+
+enum KanjiStatus {
+  NEW
+  LEARNING
+  MASTERED
+}
+
+
 
 /**
  * JLPT Levels
