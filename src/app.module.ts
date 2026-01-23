@@ -7,6 +7,7 @@ import { HiraganaModule } from './hiragana/hiragana.module';
 import { AuthModule } from './auth/auth.module';
 import { KatakanaModule } from './katakana/katakana.module';
 import { VocabularyModule } from './vocabulary/vocabulary.module';
+import { StoryModule } from './story/story.module';
 
 @Module({
   imports: [
@@ -17,7 +18,8 @@ import { VocabularyModule } from './vocabulary/vocabulary.module';
     AuthModule,
      HiraganaModule,
      KatakanaModule,
-     VocabularyModule
+     VocabularyModule,
+     StoryModule
   ],
   controllers: [AppController],
   providers: [AppService],

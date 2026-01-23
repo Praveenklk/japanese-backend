@@ -62,108 +62,107 @@ enum Role {
  * Vocabulary words (JLPT based)
  */
 model Vocabulary {
-  id               String   @id @default(uuid())
+  id String @id @default(uuid())
 
   // Core word data
-  japanese         String   // こんにちは
-  reading          String   // Konnichiwa
-  english          String   // Hello / Good afternoon
+  japanese String // こんにちは
+  reading  String // Konnichiwa
+  english  String // Hello / Good afternoon
 
   // Organization
-  category         String   // greetings, food, verbs, etc.
-  difficulty       Difficulty @default(BEGINNER)
-  jlptLevel        JLPT       @default(N5)
-  tags             String[]   @default([])
+  category     String // greetings, food, verbs, etc.
+  difficulty   Difficulty @default(BEGINNER)
+  jlptLevel    JLPT       @default(N5)
+  tags         String[]   @default([])
   lessonNumber Int?
-  explanation String? // 👈 ADD THIS
-
+  explanation  String? // 👈 ADD THIS
 
   // Usage examples
-  example          String   // こんにちは、お元気ですか？
-  exampleReading   String   // Konnichiwa, ogenki desu ka?
-  exampleEnglish   String   // Hello, how are you?
+  example        String // こんにちは、お元気ですか？
+  exampleReading String // Konnichiwa, ogenki desu ka?
+  exampleEnglish String // Hello, how are you?
 
   // Media
-  imageUrl         String?
-  audioUrl         String?
-  pitchAccent      String?  // optional (later use)
+  imageUrl    String?
+  audioUrl    String?
+  pitchAccent String? // optional (later use)
 
   // Learning state
-  isLearned        Boolean  @default(false)
-  isBookmarked     Boolean  @default(false)
+  isLearned    Boolean @default(false)
+  isBookmarked Boolean @default(false)
 
   // Review statistics
-  reviews          Int      @default(0)
-  correctCount     Int      @default(0)
-  incorrectCount   Int      @default(0)
-  streak           Int      @default(0)
+  reviews        Int @default(0)
+  correctCount   Int @default(0)
+  incorrectCount Int @default(0)
+  streak         Int @default(0)
 
   // Anki / Spaced repetition core
-  lastReviewedAt   DateTime?
-  nextReviewAt     DateTime? @default(now())
-  intervalDays     Int      @default(1)    // 1, 3, 7, 15...
-  easeFactor       Float    @default(2.5)  // SM-2 base
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime? @default(now())
+  intervalDays   Int       @default(1) // 1, 3, 7, 15...
+  easeFactor     Float     @default(2.5) // SM-2 base
 
   // System
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([nextReviewAt])
   @@index([jlptLevel, difficulty])
 }
 
 model Kanji {
-  id               String   @id @default(uuid())
+  id String @id @default(uuid())
 
   // Identity
-  character        String   @unique // 日
-  meaning          String   // Sun, Day
+  character String @unique // 日
+  meaning   String // Sun, Day
 
   // Readings
-  onyomi           String[] // ニチ, ジツ
-  kunyomi          String[] // ひ, か
+  onyomi  String[] // ニチ, ジツ
+  kunyomi String[] // ひ, か
 
   // Structure
-  strokes          Int
-  radicals         String[]
+  strokes  Int
+  radicals String[]
 
-  jlptLevel        JLPT     @default(N5)
+  jlptLevel JLPT @default(N5)
 
   // Learning aids
-  explanation      String?  // definition / notes
-  memoryStory      String?  // mnemonic / visual story
-  aiHint           String?  // AI-generated tip (optional)
+  explanation String? // definition / notes
+  memoryStory String? // mnemonic / visual story
+  aiHint      String? // AI-generated tip (optional)
 
   // Relations
-  words            KanjiWord[]
-  sentences        KanjiSentence[]
+  words     KanjiWord[]
+  sentences KanjiSentence[]
 
   // Learning state (global – per-user later)
-  status           KanjiStatus @default(NEW)
-  isBookmarked     Boolean     @default(false)
+  status       KanjiStatus @default(NEW)
+  isBookmarked Boolean     @default(false)
 
   // Review statistics
-  reviewCount      Int      @default(0)
-  correctCount     Int      @default(0)
-  incorrectCount   Int      @default(0)
-  streak           Int      @default(0)
+  reviewCount    Int @default(0)
+  correctCount   Int @default(0)
+  incorrectCount Int @default(0)
+  streak         Int @default(0)
 
   // SRS (SM-2 based)
-  lastReviewedAt   DateTime?
-  nextReviewAt     DateTime? @default(now())
-  intervalDays     Int      @default(1)
-  easeFactor       Float    @default(2.5)
+  lastReviewedAt DateTime?
+  nextReviewAt   DateTime? @default(now())
+  intervalDays   Int       @default(1)
+  easeFactor     Float     @default(2.5)
 
   // Writing practice
-  strokeOrderSvg   String?
-  strokeOrderGif   String?
+  strokeOrderSvg String?
+  strokeOrderGif String?
 
   // Metadata
-  frequencyRank    Int?     // commonness in Japanese
-  gradeLevel       Int?     // Japanese school grade
+  frequencyRank Int? // commonness in Japanese
+  gradeLevel    Int? // Japanese school grade
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([jlptLevel])
   @@index([nextReviewAt])
@@ -171,14 +170,14 @@ model Kanji {
 }
 
 model KanjiWord {
-  id        String @id @default(uuid())
+  id String @id @default(uuid())
 
-  word      String   // 日本
-  reading   String   // にほん
-  meaning   String   // Japan
+  word    String // 日本
+  reading String // にほん
+  meaning String // Japan
 
-  kanjiId   String
-  kanji     Kanji @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
+  kanjiId String
+  kanji   Kanji  @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -186,14 +185,14 @@ model KanjiWord {
 }
 
 model KanjiSentence {
-  id        String @id @default(uuid())
+  id String @id @default(uuid())
 
-  sentence  String   // 今日はいい日です。
-  reading   String   // きょうはいいひです。
-  meaning   String   // Today is a good day.
+  sentence String // 今日はいい日です。
+  reading  String // きょうはいいひです。
+  meaning  String // Today is a good day.
 
-  kanjiId   String
-  kanji     Kanji @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
+  kanjiId String
+  kanji   Kanji  @relation(fields: [kanjiId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -205,8 +204,6 @@ enum KanjiStatus {
   LEARNING
   MASTERED
 }
-
-
 
 /**
  * JLPT Levels
@@ -221,4 +218,144 @@ enum Difficulty {
   BEGINNER
   INTERMEDIATE
   ADVANCED
+}
+
+enum StoryStatus {
+  AVAILABLE // user can read
+  LOCKED // premium / future
+  DRAFT // admin only
+}
+
+model AnkiDeck {
+  id           String   @id @default(uuid())
+
+  /// Original Anki deck ID
+  ankiDeckId   String?  
+  name         String
+  description  String?
+  noteCount    Int      @default(0)
+
+  createdAt    DateTime @default(now())
+
+  notes        AnkiNote[]
+
+  @@index([ankiDeckId])
+}
+
+
+model AnkiNote {
+  id           String   @id @default(uuid())
+
+  /// Original Anki identifiers
+  ankiNoteId   String   @unique
+  ankiModelId  String
+
+  /// Raw fields in ORDER (VERY IMPORTANT)
+  /// Example:
+  /// ["毎朝", "まいあさ", "every morning", "<img src='a.png'>"]
+  fields       Json
+
+  /// Quick-access parsed fields (optional but fast)
+  front        String?
+  back         String?
+  reading      String?
+
+  deckId       String
+  deck         AnkiDeck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+
+  cards        AnkiCard[]
+  media        AnkiMedia[]
+  tags         AnkiNoteTag[]
+
+  createdAt    DateTime @default(now())
+}
+
+
+
+model AnkiCard {
+  id          String   @id @default(uuid())
+
+  ankiCardId  String   @unique
+  ord         Int      // front/back order
+
+  noteId      String
+  note        AnkiNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+}
+
+model AnkiMedia {
+  id          String   @id @default(uuid())
+
+  filename    String
+  url         String
+  type        AnkiMediaType
+
+  mimeType    String?
+  size        Int?
+
+  noteId      String
+  note        AnkiNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@index([type])
+}
+
+enum AnkiMediaType {
+  IMAGE
+  AUDIO
+  GIF
+  VIDEO
+}
+
+model AnkiTag {
+  id       String @id @default(uuid())
+  name     String @unique
+
+  notes    AnkiNoteTag[]
+}
+
+model AnkiNoteTag {
+  noteId  String
+  tagId   String
+
+  note    AnkiNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  tag     AnkiTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, tagId])
+}
+
+
+model Story {
+  id String @id @default(uuid())
+
+  // 📘 Story identity
+  title         String // English title
+  japaneseTitle String // Japanese title
+  description   String // Short intro for learners
+
+  // 🎓 Learning metadata
+  difficulty Difficulty // BEGINNER | INTERMEDIATE | ADVANCED
+  level      JLPT       @default(N5)
+  duration   String // "5 min", "10 min"
+  wordCount  Int // total words
+
+  // 🏷️ Discovery
+  tags String[] // travel, daily life, introductions
+
+  // 📚 Main learning content (stored as-is)
+  content           Json // japanese, english, vocabulary
+  comprehensionQuiz Json // MCQs, answers, explanations
+
+  // ⭐ User interaction
+  isBookmarked Boolean @default(false)
+  readCount    Int     @default(0)
+
+  // 🔐 Availability
+  status StoryStatus @default(AVAILABLE)
+
+  // 🕒 Meta
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
