@@ -16,17 +16,19 @@ import { JLPT } from '@prisma/client';
 export class StoryController {
   constructor(private readonly storyService: StoryService) {}
 
+
+    // 📚 All stories
+  @Get()
+  findAll() {
+    return this.storyService.findAll();
+  }
+
   // ➕ Create
   @Post()
   create(@Body() dto: CreateStoryDto) {
     return this.storyService.create(dto);
   }
 
-  // 📚 All stories
-  @Get()
-  findAll() {
-    return this.storyService.findAll();
-  }
 
   // 📖 Single story
   @Get(':id')

@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { KatakanaModule } from './katakana/katakana.module';
 import { VocabularyModule } from './vocabulary/vocabulary.module';
 import { StoryModule } from './story/story.module';
+import { AnkiModule } from './anki/anki.module';
 
 @Module({
   imports: [
@@ -19,7 +20,8 @@ import { StoryModule } from './story/story.module';
      HiraganaModule,
      KatakanaModule,
      VocabularyModule,
-     StoryModule
+     StoryModule,
+     AnkiModule
   ],
   controllers: [AppController],
   providers: [AppService],

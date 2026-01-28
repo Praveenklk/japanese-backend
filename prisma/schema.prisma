@@ -278,10 +278,22 @@ model AnkiCard {
   ankiCardId  String   @unique
   ord         Int      // front/back order
 
+  // 🔤 Learning content
+  kanji       String?  // 日
+  reading     String?  // にち
+  meaning     String?  // sun, day
+
+  // 🖼️ Media paths (ONLY paths, not files)
+  imagePath   String?  // /media/images/日.png
+  audioPath   String?  // /media/audio/nichi.mp3
+
+  // 🔗 Relation
   noteId      String
   note        AnkiNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
 
   createdAt   DateTime @default(now())
+
+  @@index([noteId])
 }
 
 model AnkiMedia {
