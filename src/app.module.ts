@@ -9,6 +9,7 @@ import { KatakanaModule } from './katakana/katakana.module';
 import { VocabularyModule } from './vocabulary/vocabulary.module';
 import { StoryModule } from './story/story.module';
 import { AnkiModule } from './anki/anki.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -21,7 +22,8 @@ import { AnkiModule } from './anki/anki.module';
      KatakanaModule,
      VocabularyModule,
      StoryModule,
-     AnkiModule
+     AnkiModule,
+     HealthModule
   ],
   controllers: [AppController],
   providers: [AppService],
