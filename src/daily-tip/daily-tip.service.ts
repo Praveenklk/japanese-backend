@@ -11,7 +11,17 @@ export class DailyLearningService {
   constructor(private prisma: PrismaService) {}
 
   /// 🔥 PRIMARY: OpenRouter (DeepSeek)
-  private async callDeepSeek(prompt: string) {
+private async callDeepSeek(prompt: string) {
+  // 🔥 ENV CHECK
+  if (!this.openRouterKey) {
+    console.error('❌ OPENROUTER_API_KEY is missing in environment variables');
+
+    throw new Error(
+      'Missing OPENROUTER_API_KEY. Please set it in environment variables.',
+    );
+  }
+
+  try {
     return await axios.post(
       'https://openrouter.ai/api/v1/chat/completions',
       {
@@ -25,7 +35,19 @@ export class DailyLearningService {
         },
       },
     );
+  } catch (error) {
+    console.error('❌ DeepSeek API call failed');
+
+    if (error.response) {
+      console.error('Status:', error.response.status);
+      console.error('Data:', error.response.data);
+    } else {
+      console.error('Error:', error.message);
+    }
+
+    throw error;
   }
+}
 
   /// 🔥 FALLBACK: Gemini
   private async callGemini(prompt: string) {
@@ -55,6 +77,7 @@ export class DailyLearningService {
 // }
 
 async getDailyLearning() {
+    console.log('🚫 Skipping heavy logic for test');
   const today = new Date().toISOString().split('T')[0];
 
   /// ✅ 1. CHECK DB
@@ -74,12 +97,24 @@ const previousData = await this.prisma.dailyLearning.findMany({
   select: { vocabulary: true },
 });
 
-  const usedWords = new Set(
-    previousData.flatMap(d =>
-      (d.vocabulary as any[]).map(v => v.word),
-    ),
-  );
+const usedWords = new Set<string>();
 
+for (const d of previousData) {
+  const vocab = d.vocabulary as any[];
+
+  if (!Array.isArray(vocab)) continue;
+
+  for (const v of vocab) {
+    if (v?.word) {
+      usedWords.add(v.word);
+
+      // 🔥 HARD LIMIT (prevents memory explosion)
+      if (usedWords.size >= 200) break;
+    }
+  }
+
+  if (usedWords.size >= 200) break;
+}
   const usedWordsList = Array.from(usedWords).slice(0, 50).join(', ');
 
   /// 🔥 4. STRONG PROMPT
