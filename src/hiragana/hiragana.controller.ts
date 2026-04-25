@@ -36,7 +36,7 @@ async create(
   let imageUrl: string | undefined;
 
   if (file) {
-    imageUrl = await this.cloudinaryService.uploadImage(
+    imageUrl = await this.cloudinaryService.uploadFile(
       file.buffer,
       'hiragana',
     );
@@ -77,7 +77,7 @@ async update(
   let imageUrl: string | undefined;
 
   if (file) {
-    imageUrl = await this.cloudinaryService.uploadImage(
+    imageUrl = await this.cloudinaryService.uploadFile(
       file.buffer,
       'hiragana',
     );

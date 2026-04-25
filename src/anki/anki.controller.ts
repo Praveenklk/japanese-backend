@@ -1,11 +1,13 @@
+// src/anki/anki.controller.ts
 import {
   Controller,
   Get,
   Post,
   UploadedFile,
   UseInterceptors,
+  Param,
+  Query,
 } from '@nestjs/common';
-import { Param, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AnkiService } from './anki.service';
 
@@ -19,8 +21,6 @@ export class AnkiController {
     return this.ankiService.importApkg(file);
   }
 
-
-  
   // List all decks
   @Get('decks')
   getDecks() {

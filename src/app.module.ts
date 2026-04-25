@@ -10,12 +10,16 @@ import { VocabularyModule } from './vocabulary/vocabulary.module';
 import { StoryModule } from './story/story.module';
 import { AnkiModule } from './anki/anki.module';
 import { HealthModule } from './health/health.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { DailyTipModule } from './daily-tip/daily-tip.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,   // 👈 makes env available everywhere
     }),
+       ScheduleModule.forRoot(),
     PrismaModule,
     AuthModule,
      HiraganaModule,
@@ -23,7 +27,9 @@ import { HealthModule } from './health/health.module';
      VocabularyModule,
      StoryModule,
      AnkiModule,
-     HealthModule
+     HealthModule,
+     NotificationsModule,
+     DailyTipModule
   ],
   controllers: [AppController],
   providers: [AppService],
