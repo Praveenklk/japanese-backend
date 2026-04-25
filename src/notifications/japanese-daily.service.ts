@@ -54,7 +54,7 @@ export class JapaneseDailyService {
   }
 
   // 🕗 Daily at 8 AM IST
-  @Cron('0 7 * * *', { timeZone: 'Asia/Kolkata' })
+  // @Cron('0 7 * * *', { timeZone: 'Asia/Kolkata' })
   async sendDailyJapanese() {
     this.logger.log('⏰ Daily Japanese Cron triggered');
 

@@ -40,19 +40,19 @@ export class DailyLearningService {
     );
   }
 
-@Cron('0 2 * * *', {
-  timeZone: 'Asia/Kolkata',
-})
-async handleDailyLearningCron() {
-  console.log('⏰ Running Daily Learning Cron Job at 2 AM');
+// @Cron('0 2 * * *', {
+//   timeZone: 'Asia/Kolkata',
+// })
+// async handleDailyLearningCron() {
+//   console.log('⏰ Running Daily Learning Cron Job at 2 AM');
 
-  try {
-    await this.getDailyLearning();
-    console.log('✅ Daily Learning Generated Successfully');
-  } catch (error) {
-    console.error('❌ Cron Job Failed:', error.message);
-  }
-}
+//   try {
+//     await this.getDailyLearning();
+//     console.log('✅ Daily Learning Generated Successfully');
+//   } catch (error) {
+//     console.error('❌ Cron Job Failed:', error.message);
+//   }
+// }
 
 async getDailyLearning() {
   const today = new Date().toISOString().split('T')[0];

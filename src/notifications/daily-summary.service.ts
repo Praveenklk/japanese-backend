@@ -52,7 +52,7 @@ export class JapaneseDailyService {
   }
 
   // 🧪 Testing: every minute → change later
-  @Cron('* * * * *')
+  // @Cron('* * * * *')
   async sendDailyJapanese() {
     const dailyVocabN5 = this.pickRandom(this.vocabN5, 20);
     const dailyVocabN4 = this.pickRandom(this.vocabN4, 20);
