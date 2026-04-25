@@ -40,7 +40,9 @@ export class DailyLearningService {
     );
   }
 
-  @Cron('0 2 * * *') // 🔥 Every day at 2:00 AM
+@Cron('0 2 * * *', {
+  timeZone: 'Asia/Kolkata',
+})
 async handleDailyLearningCron() {
   console.log('⏰ Running Daily Learning Cron Job at 2 AM');
 
@@ -66,9 +68,11 @@ async getDailyLearning() {
   const randomSeed = Math.floor(Math.random() * 100000);
 
   /// 🔥 3. GET USED WORDS (ANTI-DUPLICATE)
-  const previousData = await this.prisma.dailyLearning.findMany({
-    select: { vocabulary: true },
-  });
+const previousData = await this.prisma.dailyLearning.findMany({
+  take: 20, // 🔥 only last 20 records
+  orderBy: { date: 'desc' },
+  select: { vocabulary: true },
+});
 
   const usedWords = new Set(
     previousData.flatMap(d =>
@@ -178,19 +182,35 @@ FORMAT:
 
     /// 🔧 6. SAFE PARSE
     let parsed;
+    // try {
+    //   let cleaned = text
+    //     .replace(/```json|```/g, '')
+    //     .replace(/\n/g, '')
+    //     .replace(/,\s*}/g, '}')
+    //     .replace(/,\s*]/g, ']')
+    //     .trim();
+
+    //   const match = cleaned.match(/\{[\s\S]*\}/);
+    //   if (!match) throw new Error('Invalid JSON');
+
+    //   parsed = JSON.parse(match[0]);
+    // } 
+
     try {
-      let cleaned = text
-        .replace(/```json|```/g, '')
-        .replace(/\n/g, '')
-        .replace(/,\s*}/g, '}')
-        .replace(/,\s*]/g, ']')
-        .trim();
+  if (!text) throw new Error('Empty response');
 
-      const match = cleaned.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('Invalid JSON');
+  // 🔥 Extract JSON directly (no heavy replace chain)
+  const match = text.match(/\{[\s\S]*\}/);
 
-      parsed = JSON.parse(match[0]);
-    } catch (err) {
+  if (!match) {
+    console.error('RAW RESPONSE:', text);
+    throw new Error('Invalid JSON format');
+  }
+
+  // const parsed = JSON.parse(match[0]);
+parsed = JSON.parse(match[0]);
+} 
+    catch (err) {
       console.error('❌ PARSE ERROR:', err.message);
       console.error('RAW:', text);
       throw new Error('JSON parse failed');
