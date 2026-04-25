@@ -1,4 +1,3 @@
-// main.ts (TOP of file)
 import { webcrypto } from 'crypto';
 
 if (!(globalThis as any).crypto) {
@@ -12,14 +11,11 @@ import cookieParser from 'cookie-parser';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ✅ Enable cookies
   app.use(cookieParser());
 
-  // ✅ TRUST PROXY (Railway / Vercel)
   const server = app.getHttpAdapter().getInstance();
   server.set('trust proxy', 1);
 
-  // ✅ CORS
   app.enableCors({
     origin: [
       'http://localhost:5173',
@@ -28,8 +24,9 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const port = process.env.PORT ? Number(process.env.PORT) : 3000;
-  await app.listen(port);
+  const port = Number(process.env.PORT) || 3000;
+
+  await app.listen(port, '0.0.0.0'); // 🔥 IMPORTANT
 
   console.log(`🚀 Server running on port ${port}`);
 }
