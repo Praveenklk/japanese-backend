@@ -45,28 +45,32 @@ export class AuthController {
   }
 
   // LOGIN
-  @Post('login')
-  async login(
-    @Body() dto: LoginDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const user = await this.authService.validateUser(
-      dto.email,
-      dto.password,
-    );
+@Post('login')
+async login(
+  @Body() dto: LoginDto,
+  @Res({ passthrough: true }) res: Response,
+) {
+  const user = await this.authService.validateUser(
+    dto.email,
+    dto.password,
+  );
 
-    const token = this.authService.login(user);
+  const token = this.authService.login(user);
 
-    // ✅ PRODUCTION COOKIE CONFIG
-    res.cookie('access_token', token, {
-      httpOnly: true,
-      secure: true,        // REQUIRED (HTTPS)
-      sameSite: 'none',    // REQUIRED (cross-site)
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+  // 🔥 OPTIONAL: keep cookie (for web)
+  res.cookie('access_token', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'none',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
 
-    return { message: 'Login successful' };
-  }
+  // ✅ IMPORTANT: send token in response
+  return {
+    message: 'Login successful',
+    access_token: token, // 🔥 THIS FIXES YOUR ISSUE
+  };
+}
 
   // ME
   @Get('me')
