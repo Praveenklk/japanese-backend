@@ -33,27 +33,31 @@ export class AuthService {
     return user;
   }
 
-  async register(email: string, password: string) {
-    const exists = await this.prisma.user.findUnique({
-      where: { email },
-    });
+async register(email: string, password: string) {
+  // ✅ Trim inputs
+  email = email.trim().toLowerCase();
+  password = password.trim();
 
-    if (exists) {
-      throw new ConflictException('Email already registered');
-    }
+  const exists = await this.prisma.user.findUnique({
+    where: { email },
+  });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        role: Role.USER, // 👈 important
-      },
-    });
-
-    return user;
+  if (exists) {
+    throw new ConflictException('Email already registered');
   }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  const user = await this.prisma.user.create({
+    data: {
+      email,
+      password: hashedPassword,
+      role: Role.USER,
+    },
+  });
+
+  return user;
+}
 
   login(user: any) {
     return this.jwtService.sign({
