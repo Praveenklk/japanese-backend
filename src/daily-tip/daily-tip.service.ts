@@ -76,8 +76,7 @@ async handleDailyLearningCron() {
   }
 }
 
-async getDailyLearning() {
-    console.log('🚫 Skipping heavy logic for test');
+async getDailyLearning(retry = false) {
   const today = new Date().toISOString().split('T')[0];
 
   /// ✅ 1. CHECK DB
@@ -298,7 +297,10 @@ parsed = JSON.parse(match[0]);
 
 // ✅ STEP 1: ENFORCE N5 ONLY (FIRST)
 parsed.vocabulary = parsed.vocabulary.filter(
-  (v: any) => v.level === "N5"
+  (v: any) =>
+    v.level === "N5" &&
+    v.word &&
+    v.word.length <= 6
 );
 
 parsed.kanji = parsed.kanji.filter(
@@ -329,8 +331,13 @@ if (
   parsed.kanji.length < 5 ||
   parsed.grammar.length < 1
 ) {
-  console.warn('⚠️ Too many duplicates or invalid level, retrying...');
-  return this.getDailyLearning(); // retry once
+  console.warn('⚠️ Too many duplicates or invalid level');
+
+  if (!retry) {
+    return this.getDailyLearning(true); // retry once
+  }
+
+  throw new Error('Invalid AI content after retry');
 }
     /// ✅ 9. SAVE
     const saved = await this.prisma.dailyLearning.create({
