@@ -92,44 +92,77 @@ async getDailyLearning() {
 
   /// 🔥 3. GET USED WORDS (ANTI-DUPLICATE)
 const previousData = await this.prisma.dailyLearning.findMany({
-  take: 20, // 🔥 only last 20 records
+  take: 50, // increase memory window
   orderBy: { date: 'desc' },
-  select: { vocabulary: true },
+  select: { vocabulary: true, kanji: true, tip: true },
 });
 
+
 const usedWords = new Set<string>();
+const usedKanji = new Set<string>();
+const usedTips = new Set<string>();
 
 for (const d of previousData) {
+  // ✅ Vocabulary
   const vocab = d.vocabulary as any[];
-
-  if (!Array.isArray(vocab)) continue;
-
-  for (const v of vocab) {
-    if (v?.word) {
-      usedWords.add(v.word);
-
-      // 🔥 HARD LIMIT (prevents memory explosion)
-      if (usedWords.size >= 200) break;
+  if (Array.isArray(vocab)) {
+    for (const v of vocab) {
+      if (v?.word && usedWords.size < 200) {
+        usedWords.add(v.word);
+      }
     }
   }
 
-  if (usedWords.size >= 200) break;
-}
-  const usedWordsList = Array.from(usedWords).slice(0, 50).join(', ');
+  // ✅ Kanji
+  const kanji = d.kanji as any[];
+  if (Array.isArray(kanji)) {
+    for (const k of kanji) {
+      if (k?.kanji && usedKanji.size < 200) {
+        usedKanji.add(k.kanji);
+      }
+    }
+  }
 
+  // ✅ Tips
+  if (d.tip && usedTips.size < 50) {
+    usedTips.add(d.tip);
+  }
+}
+const usedWordsList = Array.from(usedWords).slice(0, 50).join(', ');
+const usedKanjiList = Array.from(usedKanji).slice(0, 50).join(', ');
+const usedTipsList = Array.from(usedTips).slice(0, 10).join(' | ');
   /// 🔥 4. STRONG PROMPT
-  const prompt = `
+const prompt = `
 Date: ${today}
 Seed: ${randomSeed}
 
 Generate DAILY UNIQUE JLPT N5 Japanese learning content.
 
-IMPORTANT RULES:
-- DO NOT repeat common beginner words like: 私, あなた, 学生, です
-- DO NOT reuse words from this list: ${usedWordsList}
-- Use DIFFERENT vocabulary every time
+IMPORTANT RULES (STRICTLY FOLLOW):
+
+- DO NOT reuse ANY vocabulary from this list:
+${usedWordsList}
+
+- DO NOT reuse ANY kanji from this list:
+${usedKanjiList}
+
+- DO NOT reuse ANY motivational tips from this list:
+${usedTipsList}
+
+- DO NOT generate common beginner words like:
+私, あなた, 学生, です
+
+- Use COMPLETELY DIFFERENT content every time
 - Include a MIX of nouns, verbs, and adjectives
-- Avoid repetition from previous outputs
+- Prefer slightly less common JLPT N5 words (avoid ultra-basic ones)
+
+FAIL CONDITIONS (VERY IMPORTANT):
+
+- If ANY vocabulary is repeated → INVALID RESPONSE
+- If ANY kanji is repeated → INVALID RESPONSE
+- If tip is similar to previous → INVALID RESPONSE
+
+If invalid → REGENERATE internally before returning.
 
 STRICT RULES:
 - Output ONLY valid JSON
@@ -196,7 +229,6 @@ FORMAT:
   ]
 }
 `;
-
   let text: string | undefined;
 
   try {
@@ -262,16 +294,28 @@ parsed = JSON.parse(match[0]);
       throw new Error('Invalid AI structure');
     }
 
-    /// 🔥 8. FILTER DUPLICATES AGAIN (SAFETY)
-    parsed.vocabulary = parsed.vocabulary.filter(
-      (v: any) => !usedWords.has(v.word),
-    );
+/// 🔥 8. FILTER DUPLICATES AGAIN (SAFETY)
 
-    /// 🔥 Ensure at least some data exists
-    if (parsed.vocabulary.length < 5) {
-      console.warn('⚠️ Too many duplicates filtered, keeping original');
-    }
+// ✅ Vocabulary
+parsed.vocabulary = parsed.vocabulary.filter(
+  (v: any) => !usedWords.has(v.word),
+);
 
+// ✅ Kanji
+parsed.kanji = parsed.kanji.filter(
+  (k: any) => !usedKanji.has(k.kanji),
+);
+
+// ✅ Tip check
+if (usedTips.has(parsed.tip)) {
+  parsed.tip = "Consistency is key. Keep learning every day 💪";
+}
+
+// ⚠️ If too much data removed → reject
+if (parsed.vocabulary.length < 5 || parsed.kanji.length < 5) {
+  console.warn('⚠️ Too many duplicates, forcing retry...');
+  throw new Error('Too many duplicates from AI');
+}
     /// ✅ 9. SAVE
     const saved = await this.prisma.dailyLearning.create({
       data: {
