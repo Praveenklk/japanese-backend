@@ -62,19 +62,19 @@ private async callDeepSeek(prompt: string) {
     );
   }
 
-// @Cron('0 2 * * *', {
-//   timeZone: 'Asia/Kolkata',
-// })
-// async handleDailyLearningCron() {
-//   console.log('⏰ Running Daily Learning Cron Job at 2 AM');
+@Cron('0 4 * * *', {
+  timeZone: 'Asia/Kolkata',
+})
+async handleDailyLearningCron() {
+  console.log('⏰ Running Daily Learning Cron Job at 2 AM');
 
-//   try {
-//     await this.getDailyLearning();
-//     console.log('✅ Daily Learning Generated Successfully');
-//   } catch (error) {
-//     console.error('❌ Cron Job Failed:', error.message);
-//   }
-// }
+  try {
+    await this.getDailyLearning();
+    console.log('✅ Daily Learning Generated Successfully');
+  } catch (error) {
+    console.error('❌ Cron Job Failed:', error.message);
+  }
+}
 
 async getDailyLearning() {
     console.log('🚫 Skipping heavy logic for test');
@@ -294,27 +294,43 @@ parsed = JSON.parse(match[0]);
       throw new Error('Invalid AI structure');
     }
 
-/// 🔥 8. FILTER DUPLICATES AGAIN (SAFETY)
+/// 🔥 8. FILTER + VALIDATE (SAFETY)
 
-// ✅ Vocabulary
+// ✅ STEP 1: ENFORCE N5 ONLY (FIRST)
+parsed.vocabulary = parsed.vocabulary.filter(
+  (v: any) => v.level === "N5"
+);
+
+parsed.kanji = parsed.kanji.filter(
+  (k: any) => k.level === "N5"
+);
+
+parsed.grammar = parsed.grammar.filter(
+  (g: any) => g.level === "N5"
+);
+
+// ✅ STEP 2: REMOVE DUPLICATES (SECOND)
 parsed.vocabulary = parsed.vocabulary.filter(
   (v: any) => !usedWords.has(v.word),
 );
 
-// ✅ Kanji
 parsed.kanji = parsed.kanji.filter(
   (k: any) => !usedKanji.has(k.kanji),
 );
 
-// ✅ Tip check
+// ✅ STEP 3: TIP CHECK
 if (usedTips.has(parsed.tip)) {
   parsed.tip = "Consistency is key. Keep learning every day 💪";
 }
 
-// ⚠️ If too much data removed → reject
-if (parsed.vocabulary.length < 5 || parsed.kanji.length < 5) {
-  console.warn('⚠️ Too many duplicates, forcing retry...');
-  throw new Error('Too many duplicates from AI');
+// ⚠️ STEP 4: FINAL VALIDATION
+if (
+  parsed.vocabulary.length < 5 ||
+  parsed.kanji.length < 5 ||
+  parsed.grammar.length < 1
+) {
+  console.warn('⚠️ Too many duplicates or invalid level, retrying...');
+  return this.getDailyLearning(); // retry once
 }
     /// ✅ 9. SAVE
     const saved = await this.prisma.dailyLearning.create({
