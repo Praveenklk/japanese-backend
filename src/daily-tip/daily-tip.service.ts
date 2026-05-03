@@ -137,7 +137,9 @@ Seed: ${randomSeed}
 
 Generate DAILY UNIQUE JLPT N5 Japanese learning content.
 
-IMPORTANT RULES (STRICTLY FOLLOW):
+━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT RULES (STRICTLY FOLLOW)
+━━━━━━━━━━━━━━━━━━━━━━━
 
 - DO NOT reuse ANY vocabulary from this list:
 ${usedWordsList}
@@ -153,31 +155,106 @@ ${usedTipsList}
 
 - Use COMPLETELY DIFFERENT content every time
 - Include a MIX of nouns, verbs, and adjectives
-- Prefer slightly less common JLPT N5 words (avoid ultra-basic ones)
+- Prefer slightly less common JLPT N5 words
 
-FAIL CONDITIONS (VERY IMPORTANT):
+━━━━━━━━━━━━━━━━━━━━━━━
+FAIL CONDITIONS
+━━━━━━━━━━━━━━━━━━━━━━━
 
 - If ANY vocabulary is repeated → INVALID RESPONSE
 - If ANY kanji is repeated → INVALID RESPONSE
-- If tip is similar to previous → INVALID RESPONSE
+- If tip is similar → INVALID RESPONSE
+- If quiz is missing ANY required field → INVALID RESPONSE
 
-If invalid → REGENERATE internally before returning.
+If invalid → REGENERATE internally before returning
 
-STRICT RULES:
+━━━━━━━━━━━━━━━━━━━━━━━
+STRICT OUTPUT RULES
+━━━━━━━━━━━━━━━━━━━━━━━
+
 - Output ONLY valid JSON
-- No markdown, no explanation
+- No markdown
+- No explanation
 - No trailing commas
 - Must be parseable using JSON.parse()
 
-CONTENT REQUIREMENTS:
+━━━━━━━━━━━━━━━━━━━━━━━
+CONTENT REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━
+
 - Vocabulary: EXACTLY 10 items
 - Grammar: EXACTLY 2 items (each 3 examples)
 - Kanji: EXACTLY 10 items (each 2 examples)
-- Quiz: EXACTLY 5 questions
+- Quiz: EXACTLY 30 questions
 
-FORMAT:
+━━━━━━━━━━━━━━━━━━━━━━━
+🔥 CRITICAL QUIZ RULES (STRICT)
+━━━━━━━━━━━━━━━━━━━━━━━
+
+Each quiz MUST include:
+
+- type (vocabulary | reading | kanji | grammar)
+- question
+- kanji
+- reading (HIRAGANA ONLY)
+- meaning (ENGLISH ONLY)
+- options (4 items)
+- answer
+
+RULES:
+
+- NEVER skip kanji, reading, or meaning
+- NEVER hide kanji only inside question
+- reading MUST be 100% hiragana (no kanji, no romaji)
+- meaning MUST be simple English
+- options must contain ONLY ONE correct answer
+- options must be relevant and unique
+
+If ANY quiz item is invalid → REGENERATE
+
+━━━━━━━━━━━━━━━━━━━━━━━
+📊 QUIZ DISTRIBUTION RULE (MANDATORY)
+━━━━━━━━━━━━━━━━━━━━━━━
+
+The 30 quiz questions MUST include:
+
+- At least 8 Vocabulary questions
+- At least 8 Reading questions
+- At least 7 Kanji questions
+- At least 7 Grammar questions
+
+If distribution is not followed → INVALID RESPONSE
+
+━━━━━━━━━━━━━━━━━━━━━━━
+QUIZ TYPES (USE ALL)
+━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Reading → kanji → hiragana  
+2. Meaning → Japanese → English  
+3. Kanji recognition → meaning  
+4. Grammar usage  
+
+━━━━━━━━━━━━━━━━━━━━━━━
+EXAMPLE QUIZ (REFERENCE)
+━━━━━━━━━━━━━━━━━━━━━━━
+
+{
+  "type": "reading",
+  "question": "What is the reading of 短い?",
+  "kanji": "短い",
+  "reading": "みじかい",
+  "meaning": "short",
+  "options": ["ながい", "みじかい", "あたらしい", "ふるい"],
+  "answer": "みじかい"
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+FINAL OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━
+
 {
   "tip": "short motivational tip",
+
   "vocabulary": [
     {
       "word": "",
@@ -189,6 +266,7 @@ FORMAT:
       "exampleMeaning": ""
     }
   ],
+
   "grammar": [
     {
       "title": "",
@@ -203,6 +281,7 @@ FORMAT:
       ]
     }
   ],
+
   "kanji": [
     {
       "kanji": "",
@@ -219,9 +298,14 @@ FORMAT:
       "memoryTip": ""
     }
   ],
+
   "quiz": [
     {
+      "type": "",
       "question": "",
+      "kanji": "",
+      "reading": "",
+      "meaning": "",
       "options": ["", "", "", ""],
       "answer": ""
     }

@@ -46,7 +46,7 @@ async getQuiz() {
   };
 
   /// 🔥 DEBUG LOG
-  console.log('🔥 DAILY LEARNING RESPONSE:', JSON.stringify(response, null, 2));
+  // console.log('🔥 DAILY LEARNING RESPONSE:', JSON.stringify(response, null, 2));
 
   return response;
 }
