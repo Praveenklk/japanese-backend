@@ -213,6 +213,11 @@ RULES:
 
 If ANY quiz item is invalid → REGENERATE
 
+- options MUST contain EXACTLY 4 unique items
+- options MUST be randomized (correct answer not always first)
+- the correct answer MUST appear in a random position
+- incorrect options MUST be plausible and related
+
 ━━━━━━━━━━━━━━━━━━━━━━━
 📊 QUIZ DISTRIBUTION RULE (MANDATORY)
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -425,18 +430,56 @@ if (
 
   throw new Error('Invalid AI content after retry');
 }
-    /// ✅ 9. SAVE
-    const saved = await this.prisma.dailyLearning.create({
-      data: {
-        date: today,
-        tip: parsed.tip,
-        vocabulary: parsed.vocabulary,
-        grammar: parsed.grammar,
-        quiz: parsed.quiz,
-        kanji: parsed.kanji,
-      },
-    });
 
+/// 🔥 8.5 FIX QUIZ ANSWER POSITION (CRITICAL)
+function shuffleArray(array: string[]) {
+  return array.sort(() => Math.random() - 0.5);
+}
+
+parsed.quiz = parsed.quiz.map((q: any) => {
+  if (!q.options || !q.answer) return q;
+
+  const uniqueOptions = Array.from(new Set(q.options)).filter(
+    (opt): opt is string => typeof opt === 'string'
+  );
+
+  if (!uniqueOptions.includes(q.answer)) {
+    uniqueOptions[0] = q.answer;
+  }
+
+  const wrongOptions = uniqueOptions.filter(
+    (opt: string) => opt !== q.answer
+  );
+
+  const selectedWrong = shuffleArray(wrongOptions).slice(0, 3);
+
+  const randomIndex = Math.floor(Math.random() * 4);
+
+  let finalOptions = [...selectedWrong];
+
+  // 🔥 SAFETY FIX
+  while (finalOptions.length < 3) {
+    finalOptions.push("None of the above");
+  }
+
+  finalOptions.splice(randomIndex, 0, q.answer);
+
+  return {
+    ...q,
+    options: finalOptions,
+  };
+});
+    /// ✅ 9. SAVE
+  const saved = await this.prisma.dailyLearning.create({
+  data: {
+    date: today,
+    tip: parsed.tip,
+    vocabulary: parsed.vocabulary,
+    grammar: parsed.grammar,
+    quiz: parsed.quiz, // now FIXED
+    kanji: parsed.kanji,
+  },
+});
     return saved;
   } catch (error) {
     if (axios.isAxiosError(error)) {
