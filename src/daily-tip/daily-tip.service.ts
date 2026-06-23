@@ -10,492 +10,301 @@ export class DailyLearningService {
 
   constructor(private prisma: PrismaService) {}
 
-  /// 🔥 PRIMARY: OpenRouter (DeepSeek)
-private async callDeepSeek(prompt: string) {
-  // 🔥 ENV CHECK
-  if (!this.openRouterKey) {
-    console.error('❌ OPENROUTER_API_KEY is missing in environment variables');
+  /// 🔥 PRIMARY: OpenRouter (DeepSeek) — capped at 4000 tokens to stay free
+  private async callDeepSeek(prompt: string) {
+    if (!this.openRouterKey) {
+      throw new Error('Missing OPENROUTER_API_KEY.');
+    }
 
-    throw new Error(
-      'Missing OPENROUTER_API_KEY. Please set it in environment variables.',
-    );
-  }
-
-  try {
-    return await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: 'deepseek/deepseek-chat',
-        messages: [{ role: 'user', content: prompt }],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${this.openRouterKey}`,
-          'Content-Type': 'application/json',
+    try {
+      return await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: 'deepseek/deepseek-chat',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 4000, // 🔥 REDUCED: was 16384, now fits free tier
         },
-      },
-    );
-  } catch (error) {
-    console.error('❌ DeepSeek API call failed');
-
-    if (error.response) {
-      console.error('Status:', error.response.status);
-      console.error('Data:', error.response.data);
-    } else {
-      console.error('Error:', error.message);
-    }
-
-    throw error;
-  }
-}
-
-  /// 🔥 FALLBACK: Gemini
-  private async callGemini(prompt: string) {
-    return await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.geminiKey}`,
-      {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          response_mime_type: 'application/json',
+        {
+          headers: {
+            Authorization: `Bearer ${this.openRouterKey}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 60000,
         },
-      },
-    );
-  }
-
-@Cron('0 4 * * *', {
-  timeZone: 'Asia/Kolkata',
-})
-async handleDailyLearningCron() {
-  console.log('⏰ Running Daily Learning Cron Job at 2 AM');
-
-  try {
-    await this.getDailyLearning();
-    console.log('✅ Daily Learning Generated Successfully');
-  } catch (error) {
-    console.error('❌ Cron Job Failed:', error.message);
-  }
-}
-
-async getDailyLearning(retry = false) {
-  const today = new Date().toISOString().split('T')[0];
-
-  /// ✅ 1. CHECK DB
-  const existing = await this.prisma.dailyLearning.findUnique({
-    where: { date: today },
-  });
-
-  if (existing) return existing;
-
-  /// 🔥 2. ADD RANDOMNESS + DATE CONTEXT
-  const randomSeed = Math.floor(Math.random() * 100000);
-
-  /// 🔥 3. GET USED WORDS (ANTI-DUPLICATE)
-const previousData = await this.prisma.dailyLearning.findMany({
-  take: 50, // increase memory window
-  orderBy: { date: 'desc' },
-  select: { vocabulary: true, kanji: true, tip: true },
-});
-
-
-const usedWords = new Set<string>();
-const usedKanji = new Set<string>();
-const usedTips = new Set<string>();
-
-for (const d of previousData) {
-  // ✅ Vocabulary
-  const vocab = d.vocabulary as any[];
-  if (Array.isArray(vocab)) {
-    for (const v of vocab) {
-      if (v?.word && usedWords.size < 200) {
-        usedWords.add(v.word);
+      );
+    } catch (error) {
+      console.error('❌ DeepSeek failed');
+      if (error.response) {
+        console.error('Status:', error.response.status);
+        console.error('Data:', JSON.stringify(error.response.data));
+      } else {
+        console.error('Error:', error.message);
       }
+      throw error;
     }
   }
 
-  // ✅ Kanji
-  const kanji = d.kanji as any[];
-  if (Array.isArray(kanji)) {
-    for (const k of kanji) {
-      if (k?.kanji && usedKanji.size < 200) {
-        usedKanji.add(k.kanji);
+  /// 🔥 FALLBACK: Gemini with retry on 503
+  private async callGemini(prompt: string, attempt = 1): Promise<any> {
+    try {
+      return await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            response_mime_type: 'application/json',
+            maxOutputTokens: 4000, // 🔥 REDUCED: cap Gemini output too
+          },
+        },
+        { timeout: 60000 },
+      );
+    } catch (error) {
+      const status = error.response?.status;
+      // Retry up to 3 times on 503 with exponential backoff
+      if (status === 503 && attempt < 3) {
+        const delay = attempt * 5000; // 5s, 10s
+        console.warn(`⚠️ Gemini 503, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
+        await new Promise((res) => setTimeout(res, delay));
+        return this.callGemini(prompt, attempt + 1);
       }
+      throw error;
     }
   }
 
-  // ✅ Tips
-  if (d.tip && usedTips.size < 50) {
-    usedTips.add(d.tip);
+  @Cron('0 4 * * *', {
+    timeZone: 'Asia/Kolkata',
+  })
+  async handleDailyLearningCron() {
+    console.log('⏰ Running Daily Learning Cron Job at 9:30 AM IST');
+    try {
+      await this.getDailyLearning();
+      console.log('✅ Daily Learning Generated Successfully');
+    } catch (error) {
+      console.error('❌ Cron Job Failed:', error.message);
+    }
   }
-}
-const usedWordsList = Array.from(usedWords).slice(0, 50).join(', ');
-const usedKanjiList = Array.from(usedKanji).slice(0, 50).join(', ');
-const usedTipsList = Array.from(usedTips).slice(0, 10).join(' | ');
-  /// 🔥 4. STRONG PROMPT
-const prompt = `
-Date: ${today}
-Seed: ${randomSeed}
 
-Generate DAILY UNIQUE JLPT N5 Japanese learning content.
+  async getDailyLearning(retry = false) {
+    const today = new Date().toISOString().split('T')[0];
 
-━━━━━━━━━━━━━━━━━━━━━━━
-IMPORTANT RULES (STRICTLY FOLLOW)
-━━━━━━━━━━━━━━━━━━━━━━━
+    /// ✅ 1. CHECK DB
+    const existing = await this.prisma.dailyLearning.findUnique({
+      where: { date: today },
+    });
+    if (existing) return existing;
 
-- DO NOT reuse ANY vocabulary from this list:
-${usedWordsList}
+    /// 🔥 2. RANDOMNESS + DATE
+    const randomSeed = Math.floor(Math.random() * 100000);
 
-- DO NOT reuse ANY kanji from this list:
-${usedKanjiList}
+    /// 🔥 3. GET USED WORDS (ANTI-DUPLICATE) — reduced window to 30 to save prompt tokens
+    const previousData = await this.prisma.dailyLearning.findMany({
+      take: 30,
+      orderBy: { date: 'desc' },
+      select: { vocabulary: true, kanji: true, tip: true },
+    });
 
-- DO NOT reuse ANY motivational tips from this list:
-${usedTipsList}
+    const usedWords = new Set<string>();
+    const usedKanji = new Set<string>();
+    const usedTips = new Set<string>();
 
-- DO NOT generate common beginner words like:
-私, あなた, 学生, です
+    for (const d of previousData) {
+      const vocab = d.vocabulary as any[];
+      if (Array.isArray(vocab)) {
+        for (const v of vocab) {
+          if (v?.word && usedWords.size < 100) usedWords.add(v.word);
+        }
+      }
+      const kanji = d.kanji as any[];
+      if (Array.isArray(kanji)) {
+        for (const k of kanji) {
+          if (k?.kanji && usedKanji.size < 100) usedKanji.add(k.kanji);
+        }
+      }
+      if (d.tip && usedTips.size < 20) usedTips.add(d.tip);
+    }
 
-- Use COMPLETELY DIFFERENT content every time
-- Include a MIX of nouns, verbs, and adjectives
-- Prefer slightly less common JLPT N5 words
-- Keep all sentences SHORT (max 6–8 words)
+    // 🔥 REDUCED list sizes to cut prompt tokens
+    const usedWordsList = Array.from(usedWords).slice(0, 30).join(',');
+    const usedKanjiList = Array.from(usedKanji).slice(0, 30).join(',');
+    const usedTipsList = Array.from(usedTips).slice(0, 5).join('|');
 
-━━━━━━━━━━━━━━━━━━━━━━━
-FAIL CONDITIONS
-━━━━━━━━━━━━━━━━━━━━━━━
+    /// 🔥 4. COMPACT PROMPT (reduced ~60% token size vs original)
+    const prompt = `Date:${today} Seed:${randomSeed}
 
-- If ANY vocabulary is repeated → INVALID RESPONSE
-- If ANY kanji is repeated → INVALID RESPONSE
-- If tip is similar → INVALID RESPONSE
-- If quiz is missing ANY required field → INVALID RESPONSE
+Generate JLPT N5 Japanese daily learning content as JSON only. No markdown. No explanation.
 
-If invalid → REGENERATE internally before returning
-
-━━━━━━━━━━━━━━━━━━━━━━━
-STRICT OUTPUT RULES
-━━━━━━━━━━━━━━━━━━━━━━━
-
-- Output ONLY valid JSON
-- No markdown
-- No explanation
-- No trailing commas
-- Must be parseable using JSON.parse()
-
-━━━━━━━━━━━━━━━━━━━━━━━
-CONTENT REQUIREMENTS
-━━━━━━━━━━━━━━━━━━━━━━━
-
-- Vocabulary: EXACTLY 10 items
-- Grammar: EXACTLY 2 items (each 3 examples)
-- Kanji: EXACTLY 10 items (each 2 examples)
-- Quiz: EXACTLY 20 questions
-
-━━━━━━━━━━━━━━━━━━━━━━━
-🔥 CRITICAL QUIZ RULES (STRICT)
-━━━━━━━━━━━━━━━━━━━━━━━
-
-Each quiz MUST include:
-
-- type (vocabulary | reading | kanji | grammar)
-- question
-- kanji
-- reading (HIRAGANA ONLY)
-- meaning (ENGLISH ONLY)
-- options (4 items)
-- answer
+AVOID these vocabulary: ${usedWordsList}
+AVOID these kanji: ${usedKanjiList}
+AVOID these tips: ${usedTipsList}
+AVOID common words: 私,あなた,学生,です
 
 RULES:
+- Mix nouns, verbs, adjectives
+- Short sentences (max 6-8 words)
+- All readings in hiragana only
+- Output ONLY valid JSON, parseable by JSON.parse()
 
-- NEVER skip kanji, reading, or meaning
-- NEVER hide kanji only inside question
-- reading MUST be 100% hiragana (no kanji, no romaji)
-- meaning MUST be simple English
-- options must contain ONLY ONE correct answer
-- options must be relevant and unique
-
-If ANY quiz item is invalid → REGENERATE
-
-- options MUST contain EXACTLY 4 unique items
-- options MUST be randomized (correct answer not always first)
-- the correct answer MUST appear in a random position
-- incorrect options MUST be plausible and related
-
-━━━━━━━━━━━━━━━━━━━━━━━
-📊 QUIZ DISTRIBUTION RULE (MANDATORY)
-━━━━━━━━━━━━━━━━━━━━━━━
-
-The 20 quiz questions MUST include:
-
-- At least 5 Vocabulary questions
-- At least 5 Reading questions
-- At least 5 Kanji questions
-- At least 5 Grammar questions
-
-If distribution is not followed → INVALID RESPONSE
-
-━━━━━━━━━━━━━━━━━━━━━━━
-QUIZ TYPES (USE ALL)
-━━━━━━━━━━━━━━━━━━━━━━━
-
-1. Reading → kanji → hiragana  
-2. Meaning → Japanese → English  
-3. Kanji recognition → meaning  
-4. Grammar usage  
-
-━━━━━━━━━━━━━━━━━━━━━━━
-EXAMPLE QUIZ (REFERENCE)
-━━━━━━━━━━━━━━━━━━━━━━━
-
-{
-  "type": "reading",
-  "question": "What is the reading of 短い?",
-  "kanji": "短い",
-  "reading": "みじかい",
-  "meaning": "short",
-  "options": ["ながい", "みじかい", "あたらしい", "ふるい"],
-  "answer": "みじかい"
-}
-
-━━━━━━━━━━━━━━━━━━━━━━━
-FINAL OUTPUT FORMAT
-━━━━━━━━━━━━━━━━━━━━━━━
-
+REQUIRED OUTPUT:
 {
   "tip": "short motivational tip",
-
-  "vocabulary": [
-    {
-      "word": "",
-      "reading": "",
-      "meaning": "",
-      "level": "N5",
-      "example": "",
-      "exampleReading": "",
-      "exampleMeaning": ""
-    }
-  ],
-
-  "grammar": [
-    {
-      "title": "",
-      "level": "N5",
-      "explanation": "",
-      "examples": [
-        {
-          "sentence": "",
-          "reading": "",
-          "meaning": ""
-        }
-      ]
-    }
-  ],
-
-  "kanji": [
-    {
-      "kanji": "",
-      "meaning": "",
-      "reading": "",
-      "level": "N5",
-      "examples": [
-        {
-          "sentence": "",
-          "reading": "",
-          "meaning": ""
-        }
-      ],
-      "memoryTip": ""
-    }
-  ],
-
-  "quiz": [
-    {
-      "type": "",
-      "question": "",
-      "kanji": "",
-      "reading": "",
-      "meaning": "",
-      "options": ["", "", "", ""],
-      "answer": ""
-    }
-  ]
+  "vocabulary": [10 items: {word,reading,meaning,level:"N5",example,exampleReading,exampleMeaning}],
+  "grammar": [2 items: {title,level:"N5",explanation,examples:[3 items:{sentence,reading,meaning}]}],
+  "kanji": [10 items: {kanji,meaning,reading,level:"N5",examples:[2 items:{sentence,reading,meaning}],memoryTip}],
+  "quiz": [20 items: {type,question,kanji,reading,meaning,options:[4 strings],answer}]
 }
-`;
 
-  let text: string | undefined;
+QUIZ RULES:
+- type: vocabulary|reading|kanji|grammar
+- Exactly 5 of each type (5+5+5+5=20)
+- reading must be hiragana only
+- options must have exactly 4 unique items
+- answer must appear in options
+- randomize answer position
 
-  try {
-    /// 🔥 5. TRY DEEPSEEK
-    try {
-      const response = await this.callDeepSeek(prompt);
-      text = response.data?.choices?.[0]?.message?.content;
-      console.log('✅ DeepSeek response');
-    } catch {
-      console.warn('⚠️ DeepSeek failed, switching to Gemini...');
-      const response = await this.callGemini(prompt);
-      text =
-        response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      console.log('✅ Gemini fallback');
-    }
+EXAMPLE QUIZ ITEM:
+{"type":"reading","question":"What is the reading of 短い?","kanji":"短い","reading":"みじかい","meaning":"short","options":["ながい","みじかい","あたらしい","ふるい"],"answer":"みじかい"}`;
 
-    if (!text) throw new Error('Empty AI response');
-
-    /// 🔧 6. SAFE PARSE
-    let parsed;
-    // try {
-    //   let cleaned = text
-    //     .replace(/```json|```/g, '')
-    //     .replace(/\n/g, '')
-    //     .replace(/,\s*}/g, '}')
-    //     .replace(/,\s*]/g, ']')
-    //     .trim();
-
-    //   const match = cleaned.match(/\{[\s\S]*\}/);
-    //   if (!match) throw new Error('Invalid JSON');
-
-    //   parsed = JSON.parse(match[0]);
-    // } 
+    let text: string | undefined;
 
     try {
-  if (!text) throw new Error('Empty response');
+      /// 🔥 5. TRY DEEPSEEK FIRST
+      try {
+        const response = await this.callDeepSeek(prompt);
+        text = response.data?.choices?.[0]?.message?.content;
+        console.log('✅ DeepSeek response received');
+      } catch (deepseekError) {
+        const status = deepseekError.response?.status;
+        if (status === 402) {
+          console.warn('⚠️ DeepSeek out of credits (402), switching to Gemini...');
+        } else {
+          console.warn('⚠️ DeepSeek failed, switching to Gemini...');
+        }
+        const response = await this.callGemini(prompt);
+        text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        console.log('✅ Gemini fallback response received');
+      }
 
-  // 🔥 Extract JSON directly (no heavy replace chain)
-  const match = text.match(/\{[\s\S]*\}/);
+      if (!text) throw new Error('Empty AI response');
 
-  if (!match) {
-    console.error('RAW RESPONSE:', text);
-    throw new Error('Invalid JSON format');
-  }
+      /// 🔧 6. SAFE PARSE
+      let parsed: any;
+      try {
+        const match = text.match(/\{[\s\S]*\}/);
+        if (!match) {
+          console.error('RAW RESPONSE:', text);
+          throw new Error('Invalid JSON format — no JSON object found');
+        }
+        parsed = JSON.parse(match[0]);
+      } catch (err) {
+        console.error('❌ PARSE ERROR:', err.message);
+        console.error('RAW:', text?.slice(0, 500));
+        throw new Error('JSON parse failed');
+      }
 
-  // const parsed = JSON.parse(match[0]);
-parsed = JSON.parse(match[0]);
-} 
-    catch (err) {
-      console.error('❌ PARSE ERROR:', err.message);
-      console.error('RAW:', text);
-      throw new Error('JSON parse failed');
+      /// ✅ 7. STRUCTURE VALIDATION
+      if (
+        !parsed?.tip ||
+        !Array.isArray(parsed?.vocabulary) ||
+        !Array.isArray(parsed?.grammar) ||
+        !Array.isArray(parsed?.kanji) ||
+        !Array.isArray(parsed?.quiz)
+      ) {
+        throw new Error('Invalid AI structure — missing required fields');
+      }
+
+      /// 🔥 8. FILTER + VALIDATE
+
+      // N5 only
+      parsed.vocabulary = parsed.vocabulary.filter(
+        (v: any) => v.level === 'N5' && v.word && v.word.length <= 6,
+      );
+      parsed.kanji = parsed.kanji.filter((k: any) => k.level === 'N5');
+      parsed.grammar = parsed.grammar.filter((g: any) => g.level === 'N5');
+
+      // Remove duplicates
+      parsed.vocabulary = parsed.vocabulary.filter(
+        (v: any) => !usedWords.has(v.word),
+      );
+      parsed.kanji = parsed.kanji.filter(
+        (k: any) => !usedKanji.has(k.kanji),
+      );
+
+      // Tip dedup
+      if (usedTips.has(parsed.tip)) {
+        parsed.tip = 'Consistency is key. Keep learning every day 💪';
+      }
+
+      // Minimum content check
+      if (
+        parsed.vocabulary.length < 5 ||
+        parsed.kanji.length < 5 ||
+        parsed.grammar.length < 1
+      ) {
+        console.warn('⚠️ Too many duplicates or insufficient N5 content');
+        if (!retry) {
+          return this.getDailyLearning(true);
+        }
+        throw new Error('Invalid AI content after retry');
+      }
+
+      /// 🔥 8.5 FIX QUIZ ANSWER POSITION
+      function shuffleArray<T>(array: T[]): T[] {
+        return array.sort(() => Math.random() - 0.5);
+      }
+
+      parsed.quiz = parsed.quiz.map((q: any) => {
+        if (!q.options || !q.answer) return q;
+
+        const uniqueOptions = Array.from(new Set<string>(q.options)).filter(
+          (opt): opt is string => typeof opt === 'string',
+        );
+
+        if (!uniqueOptions.includes(q.answer)) {
+          uniqueOptions[0] = q.answer;
+        }
+
+        const wrongOptions = uniqueOptions.filter((opt: string) => opt !== q.answer);
+        const selectedWrong = shuffleArray([...wrongOptions]).slice(0, 3);
+
+        while (selectedWrong.length < 3) {
+          selectedWrong.push('なし');
+        }
+
+        const randomIndex = Math.floor(Math.random() * 4);
+        const finalOptions = [...selectedWrong];
+        finalOptions.splice(randomIndex, 0, q.answer);
+
+        return { ...q, options: finalOptions };
+      });
+
+      /// ✅ 9. SAVE TO DB
+      const saved = await this.prisma.dailyLearning.create({
+        data: {
+          date: today,
+          tip: parsed.tip,
+          vocabulary: parsed.vocabulary,
+          grammar: parsed.grammar,
+          quiz: parsed.quiz,
+          kanji: parsed.kanji,
+        },
+      });
+
+      return saved;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        console.error('Axios Error:', error.response?.data);
+      }
+      console.error('❌ Daily Learning Error:', error.message);
+
+      // Return safe fallback so app doesn't crash
+      return {
+        date: today,
+        tip: 'Consistency beats intensity. Study a little every day! 💪',
+        vocabulary: [],
+        grammar: [],
+        kanji: [],
+        quiz: [],
+      };
     }
-
-    /// ✅ 7. VALIDATION
-    if (
-      !parsed?.tip ||
-      !Array.isArray(parsed?.vocabulary) ||
-      !Array.isArray(parsed?.grammar) ||
-      !Array.isArray(parsed?.kanji) ||
-      !Array.isArray(parsed?.quiz)
-    ) {
-      throw new Error('Invalid AI structure');
-    }
-
-/// 🔥 8. FILTER + VALIDATE (SAFETY)
-
-// ✅ STEP 1: ENFORCE N5 ONLY (FIRST)
-parsed.vocabulary = parsed.vocabulary.filter(
-  (v: any) =>
-    v.level === "N5" &&
-    v.word &&
-    v.word.length <= 6
-);
-
-parsed.kanji = parsed.kanji.filter(
-  (k: any) => k.level === "N5"
-);
-
-parsed.grammar = parsed.grammar.filter(
-  (g: any) => g.level === "N5"
-);
-
-// ✅ STEP 2: REMOVE DUPLICATES (SECOND)
-parsed.vocabulary = parsed.vocabulary.filter(
-  (v: any) => !usedWords.has(v.word),
-);
-
-parsed.kanji = parsed.kanji.filter(
-  (k: any) => !usedKanji.has(k.kanji),
-);
-
-// ✅ STEP 3: TIP CHECK
-if (usedTips.has(parsed.tip)) {
-  parsed.tip = "Consistency is key. Keep learning every day 💪";
-}
-
-// ⚠️ STEP 4: FINAL VALIDATION
-if (
-  parsed.vocabulary.length < 5 ||
-  parsed.kanji.length < 5 ||
-  parsed.grammar.length < 1
-) {
-  console.warn('⚠️ Too many duplicates or invalid level');
-
-  if (!retry) {
-    return this.getDailyLearning(true); // retry once
   }
-
-  throw new Error('Invalid AI content after retry');
-}
-
-/// 🔥 8.5 FIX QUIZ ANSWER POSITION (CRITICAL)
-function shuffleArray(array: string[]) {
-  return array.sort(() => Math.random() - 0.5);
-}
-
-parsed.quiz = parsed.quiz.map((q: any) => {
-  if (!q.options || !q.answer) return q;
-
-  const uniqueOptions = Array.from(new Set(q.options)).filter(
-    (opt): opt is string => typeof opt === 'string'
-  );
-
-  if (!uniqueOptions.includes(q.answer)) {
-    uniqueOptions[0] = q.answer;
-  }
-
-  const wrongOptions = uniqueOptions.filter(
-    (opt: string) => opt !== q.answer
-  );
-
-  const selectedWrong = shuffleArray(wrongOptions).slice(0, 3);
-
-  const randomIndex = Math.floor(Math.random() * 4);
-
-  let finalOptions = [...selectedWrong];
-
-  // 🔥 SAFETY FIX
-  while (finalOptions.length < 3) {
-    finalOptions.push("None of the above");
-  }
-
-  finalOptions.splice(randomIndex, 0, q.answer);
-
-  return {
-    ...q,
-    options: finalOptions,
-  };
-});
-    /// ✅ 9. SAVE
-  const saved = await this.prisma.dailyLearning.create({
-  data: {
-    date: today,
-    tip: parsed.tip,
-    vocabulary: parsed.vocabulary,
-    grammar: parsed.grammar,
-    quiz: parsed.quiz, // now FIXED
-    kanji: parsed.kanji,
-  },
-});
-    return saved;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error('Axios:', error.response?.data);
-    }
-
-    console.error('❌ Daily Learning Error:', error.message);
-
-    return {
-      date: today,
-      tip: 'Consistency beats intensity. Study a little every day! 💪',
-      vocabulary: [],
-      grammar: [],
-      kanji: [],
-      quiz: [],
-    };
-  }
-}
 }
