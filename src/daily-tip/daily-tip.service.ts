@@ -18,68 +18,92 @@ export class DailyLearningService {
       throw new Error('Missing OPENROUTER_API_KEY.');
     }
 
-    try {
-      return await axios.post(
-        'https://openrouter.ai/api/v1/chat/completions',
+try {
+  return await axios.post(
+    'https://openrouter.ai/api/v1/chat/completions',
+    {
+      model: 'openrouter/free', // Automatically selects an available free model
+      messages: [
         {
-          model: 'deepseek/deepseek-chat-v3-0324:free', // 🔥 FREE variant, $0 cost
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 4000,
+          role: 'user',
+          content: prompt,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${this.openRouterKey}`,
-            'Content-Type': 'application/json',
-            // OpenRouter recommends these for free-tier rate limiting / attribution
-            'HTTP-Referer': process.env.APP_URL || 'https://localhost',
-            'X-Title': 'Daily JLPT Learning',
-          },
-          timeout: 60000,
-        },
-      );
-    } catch (error) {
-      console.error('❌ DeepSeek failed');
-      if (error.response) {
-        console.error('Status:', error.response.status);
-        console.error('Data:', JSON.stringify(error.response.data));
-      } else {
-        console.error('Error:', error.message);
-      }
-      throw error;
-    }
+      ],
+      max_tokens: 1000,
+      temperature: 0.7,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${this.openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+        'X-Title': 'Daily JLPT Learning',
+      },
+      timeout: 60000,
+    },
+  );
+} catch (error) {
+  console.error('❌ OpenRouter failed');
+
+  if (axios.isAxiosError(error) && error.response) {
+    console.error('Status:', error.response.status);
+    console.error('Data:', JSON.stringify(error.response.data));
+  } else if (error instanceof Error) {
+    console.error('Error:', error.message);
   }
+
+  throw error;
+}}
 
   /// 🔥 FALLBACK: Gemini with retry on 503 AND 429 (rate/quota related)
-  private async callGemini(prompt: string, attempt = 1): Promise<any> {
-    try {
-      return await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
-        {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            response_mime_type: 'application/json',
-            maxOutputTokens: 4000,
+private async callGemini(prompt: string, attempt = 1): Promise<any> {
+  try {
+    return await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
+      {
+        contents: [
+          {
+            parts: [{ text: prompt }],
           },
+        ],
+        generationConfig: {
+          response_mime_type: 'application/json',
+          maxOutputTokens: 1000,
+          temperature: 0.7,
         },
-        { timeout: 60000 },
-      );
-    } catch (error) {
+      },
+      {
+        timeout: 60000,
+      },
+    );
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
       const status = error.response?.status;
+      const message =
+        error.response?.data?.error?.message ?? error.message;
 
-      // Retry on 503 (overloaded) and 429 (rate limited / quota) with backoff.
-      // NOTE: a 429 with limit:0 in the message means the key has NO free-tier
-      // quota allocated at all (billing/region issue) — retries won't fix that,
-      // but we still back off in case it's a transient burst limit instead.
-      if ((status === 503 || status === 429) && attempt < 3) {
-        const delay = attempt * 5000; // 5s, 10s
-        console.warn(`⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
-        await new Promise((res) => setTimeout(res, delay));
+      // Don't retry if the account has no quota.
+      if (status === 429 && message.includes('limit: 0')) {
+        console.error('❌ Gemini quota exhausted (limit: 0).');
+        throw error;
+      }
+
+      // Retry for temporary overloads or rate limits.
+      if ((status === 429 || status === 503) && attempt < 3) {
+        const delay = attempt * 5000;
+        console.warn(
+          `⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+
         return this.callGemini(prompt, attempt + 1);
       }
-      throw error;
     }
-  }
 
+    throw error;
+  }
+}
   @Cron('0 4 * * *', {
     timeZone: 'Asia/Kolkata',
   })
