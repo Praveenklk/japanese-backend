@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { Cron } from '@nestjs/schedule';
@@ -8,55 +8,100 @@ export class DailyLearningService {
   private readonly openRouterKey = process.env.OPENROUTER_API_KEY;
   private readonly geminiKey = process.env.GEMINI_API_KEY;
 
+  // 🔥 A short rotation of pinned, non-reasoning free models on OpenRouter.
+  // Do NOT use the 'openrouter/free' auto-router — it can hand you a
+  // reasoning model (nvidia/nemotron, poolside/laguna, etc.) that burns the
+  // whole max_tokens budget on internal "reasoning" text and returns
+  // finish_reason:"length" with content:null before ever writing JSON.
+  // Any single free model can also get upstream-rate-limited (e.g. Venice
+  // 429 on llama-3.3-70b) independent of your own OpenRouter quota, so we
+  // try a short list before giving up on OpenRouter entirely.
+  private readonly FREE_MODELS = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'deepseek/deepseek-chat-v3-0324:free',
+    'qwen/qwen-2.5-72b-instruct:free',
+  ];
+
+  // 🔥 In-memory lock so two concurrent requests (e.g. overlapping web
+  // requests, or a retry racing a fresh call) don't both independently
+  // hammer OpenRouter + Gemini for the same date at the same time. This is
+  // per-process; if you run multiple instances, move this to a DB-level
+  // lock (e.g. a short-lived "generating" row) instead.
+  private inFlight: Promise<any> | null = null;
+
+  // 🔥 Circuit breaker for Gemini. A 429 with "limit: 0" means the API key /
+  // project has NO free-tier quota granted at all — this is a Google Cloud
+  // console / billing issue, not something retries fix. Once we see it, stop
+  // wasting a full request+backoff cycle on Gemini for the rest of this
+  // process's lifetime, and go straight to the DB fallback instead.
+  private geminiQuotaDead = false;
+
   constructor(private prisma: PrismaService) {}
 
-  /// 🔥 PRIMARY: OpenRouter (DeepSeek) — using the :free variant so it never
-  /// consumes paid credits. Non-free deepseek/deepseek-chat WILL 402 as soon
-  /// as your balance is low, regardless of max_tokens.
+  private async callOpenRouterModel(prompt: string, model: string) {
+    return axios.post(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 4000, // headroom for 10 vocab + 10 kanji + 2 grammar + 20 quiz items
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${this.openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'https://localhost',
+          'X-Title': 'Daily JLPT Learning',
+        },
+        timeout: 60000,
+      },
+    );
+  }
+
+  /// 🔥 PRIMARY: try each free OpenRouter model in turn. Moves to the next
+  /// model immediately on 429/5xx instead of waiting out Retry-After, since
+  /// we have other free models to try first and Gemini as a final fallback.
   private async callDeepSeek(prompt: string) {
     if (!this.openRouterKey) {
       throw new Error('Missing OPENROUTER_API_KEY.');
     }
 
-    try {
-      return await axios.post(
-        'https://openrouter.ai/api/v1/chat/completions',
-        {
-          // 🔥 Pin to a specific non-reasoning instruct model.
-          // Do NOT use 'openrouter/free' (the auto-router) — it can hand you
-          // a reasoning model (nvidia/nemotron, poolside/laguna, etc.) which
-          // burns your entire max_tokens budget on internal "reasoning" text
-          // and returns finish_reason:"length" with content:null, before it
-          // ever writes the actual JSON.
-          model: 'meta-llama/llama-3.3-70b-instruct:free',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 4000, // needs headroom for 10 vocab + 10 kanji + 2 grammar + 20 quiz items
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${this.openRouterKey}`,
-            'Content-Type': 'application/json',
-            // OpenRouter recommends these for free-tier rate limiting / attribution
-            'HTTP-Referer': process.env.APP_URL || 'https://localhost',
-            'X-Title': 'Daily JLPT Learning',
-          },
-          timeout: 60000,
-        },
-      );
-    } catch (error) {
-      console.error('❌ DeepSeek failed');
-      if (error.response) {
-        console.error('Status:', error.response.status);
-        console.error('Data:', JSON.stringify(error.response.data));
-      } else {
-        console.error('Error:', error.message);
+    let lastError: any;
+
+    for (const model of this.FREE_MODELS) {
+      try {
+        const response = await this.callOpenRouterModel(prompt, model);
+        console.log(`✅ OpenRouter model succeeded: ${model}`);
+        return response;
+      } catch (error: any) {
+        lastError = error;
+        const status = error.response?.status;
+        const raw = error.response?.data?.error?.metadata?.raw || error.message;
+        console.error(`❌ OpenRouter model failed: ${model} (status ${status})`);
+        console.error('Detail:', raw);
+
+        // 402 (out of credits) and 429 (rate limited, ours or upstream
+        // provider's) both mean "try the next model in the list".
+        if (status === 402 || status === 429 || status === 503) {
+          continue;
+        }
+        // Anything else (auth error, malformed request, etc.) is unlikely
+        // to be fixed by switching models — fail fast.
+        throw error;
       }
-      throw error;
     }
+
+    console.error('❌ All free OpenRouter models exhausted');
+    throw lastError;
   }
 
-  /// 🔥 FALLBACK: Gemini with retry on 503 AND 429 (rate/quota related)
+  /// 🔥 FALLBACK: Gemini with retry on 503 and transient 429s. Short-circuits
+  /// immediately once the quota is confirmed dead for this process.
   private async callGemini(prompt: string, attempt = 1): Promise<any> {
+    if (this.geminiQuotaDead) {
+      throw new Error('Gemini quota previously confirmed dead (limit: 0) — skipping call.');
+    }
+
     try {
       return await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
@@ -69,13 +114,18 @@ export class DailyLearningService {
         },
         { timeout: 60000 },
       );
-    } catch (error) {
+    } catch (error: any) {
       const status = error.response?.status;
+      const message = error.response?.data?.error?.message ?? error.message ?? '';
 
-      // Retry on 503 (overloaded) and 429 (rate limited / quota) with backoff.
-      // NOTE: a 429 with limit:0 in the message means the key has NO free-tier
-      // quota allocated at all (billing/region issue) — retries won't fix that,
-      // but we still back off in case it's a transient burst limit instead.
+      // "limit: 0" means no free-tier quota was ever granted to this key/
+      // project — a config issue on Google's side, not a transient state.
+      if (status === 429 && message.includes('limit: 0')) {
+        console.error('❌ Gemini quota exhausted (limit: 0) — marking dead for this process.');
+        this.geminiQuotaDead = true;
+        throw error;
+      }
+
       if ((status === 503 || status === 429) && attempt < 3) {
         const delay = attempt * 5000; // 5s, 10s
         console.warn(`⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
@@ -94,12 +144,29 @@ export class DailyLearningService {
     try {
       await this.getDailyLearning();
       console.log('✅ Daily Learning Generated Successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Cron Job Failed:', error.message);
     }
   }
 
+  /// Public entry point — wraps the real logic in the in-flight lock so
+  /// concurrent callers share a single generation attempt instead of each
+  /// independently hammering OpenRouter + Gemini.
   async getDailyLearning(retry = false) {
+    if (this.inFlight) {
+      console.log('⏳ Generation already in progress, awaiting existing call...');
+      return this.inFlight;
+    }
+
+    this.inFlight = this.generateDailyLearning(retry);
+    try {
+      return await this.inFlight;
+    } finally {
+      this.inFlight = null;
+    }
+  }
+
+  private async generateDailyLearning(retry = false) {
     const today = new Date().toISOString().split('T')[0];
 
     /// ✅ 1. CHECK DB
@@ -181,18 +248,30 @@ EXAMPLE QUIZ ITEM:
     let text: string | undefined;
 
     try {
-      /// 🔥 5. TRY DEEPSEEK FIRST
+      /// 🔥 5. TRY OPENROUTER MODEL ROTATION FIRST, THEN GEMINI
       try {
         const response = await this.callDeepSeek(prompt);
-        text = response.data?.choices?.[0]?.message?.content;
-        console.log('✅ DeepSeek response received');
-      } catch (deepseekError) {
-        const status = deepseekError.response?.status;
-        if (status === 402) {
-          console.warn('⚠️ DeepSeek out of credits (402), switching to Gemini...');
-        } else {
-          console.warn('⚠️ DeepSeek failed, switching to Gemini...');
+        const choice = response.data?.choices?.[0];
+        if (!choice) throw new Error('No choices returned from OpenRouter');
+
+        if (typeof choice.message?.content === 'string') {
+          text = choice.message.content;
+        } else if (Array.isArray(choice.message?.content)) {
+          text = choice.message.content.map((part: any) => part.text || '').join('');
         }
+
+        // A reasoning model that got truncated mid-thought looks like this:
+        // finish_reason "length" with empty/null content but populated
+        // reasoning. Treat that as a hard failure rather than trying to
+        // parse JSON out of it.
+        if (!text || text.trim() === '') {
+          throw new Error(
+            `OpenRouter returned empty content (finish_reason: ${choice.finish_reason ?? 'unknown'})`,
+          );
+        }
+        console.log('✅ OpenRouter response received');
+      } catch (openRouterError: any) {
+        console.warn('⚠️ OpenRouter exhausted, switching to Gemini...');
         const response = await this.callGemini(prompt);
         text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         console.log('✅ Gemini fallback response received');
@@ -209,7 +288,7 @@ EXAMPLE QUIZ ITEM:
           throw new Error('Invalid JSON format — no JSON object found');
         }
         parsed = JSON.parse(match[0]);
-      } catch (err) {
+      } catch (err: any) {
         console.error('❌ PARSE ERROR:', err.message);
         console.error('RAW:', text?.slice(0, 500));
         throw new Error('JSON parse failed');
@@ -233,12 +312,8 @@ EXAMPLE QUIZ ITEM:
       parsed.kanji = parsed.kanji.filter((k: any) => k.level === 'N5');
       parsed.grammar = parsed.grammar.filter((g: any) => g.level === 'N5');
 
-      parsed.vocabulary = parsed.vocabulary.filter(
-        (v: any) => !usedWords.has(v.word),
-      );
-      parsed.kanji = parsed.kanji.filter(
-        (k: any) => !usedKanji.has(k.kanji),
-      );
+      parsed.vocabulary = parsed.vocabulary.filter((v: any) => !usedWords.has(v.word));
+      parsed.kanji = parsed.kanji.filter((k: any) => !usedKanji.has(k.kanji));
 
       if (usedTips.has(parsed.tip)) {
         parsed.tip = 'Consistency is key. Keep learning every day 💪';
@@ -251,7 +326,7 @@ EXAMPLE QUIZ ITEM:
       ) {
         console.warn('⚠️ Too many duplicates or insufficient N5 content');
         if (!retry) {
-          return this.getDailyLearning(true);
+          return this.generateDailyLearning(true);
         }
         throw new Error('Invalid AI content after retry');
       }
@@ -299,15 +374,15 @@ EXAMPLE QUIZ ITEM:
       });
 
       return saved;
-    } catch (error) {
+    } catch (error: any) {
       if (axios.isAxiosError(error)) {
         console.error('Axios Error:', error.response?.data);
       }
       console.error('❌ Daily Learning Error:', error.message);
 
-      // 🔥 10. BOTH PROVIDERS FAILED — fall back to the most recent DB entry
-      // instead of returning an empty payload, so the app still shows real
-      // content to the user.
+      /// 🔥 10. BOTH PROVIDERS FAILED — fall back to the most recent DB entry
+      /// instead of returning an empty payload, so the app still shows real
+      /// content to the user.
       const lastGood = await this.prisma.dailyLearning.findFirst({
         orderBy: { date: 'desc' },
       });
