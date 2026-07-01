@@ -10,7 +10,9 @@ export class DailyLearningService {
 
   constructor(private prisma: PrismaService) {}
 
-  /// 🔥 PRIMARY: OpenRouter (DeepSeek) — capped at 4000 tokens to stay free
+  /// 🔥 PRIMARY: OpenRouter (DeepSeek) — using the :free variant so it never
+  /// consumes paid credits. Non-free deepseek/deepseek-chat WILL 402 as soon
+  /// as your balance is low, regardless of max_tokens.
   private async callDeepSeek(prompt: string) {
     if (!this.openRouterKey) {
       throw new Error('Missing OPENROUTER_API_KEY.');
@@ -20,14 +22,17 @@ export class DailyLearningService {
       return await axios.post(
         'https://openrouter.ai/api/v1/chat/completions',
         {
-          model: 'deepseek/deepseek-chat',
+          model: 'deepseek/deepseek-chat-v3-0324:free', // 🔥 FREE variant, $0 cost
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 4000, // 🔥 REDUCED: was 16384, now fits free tier
+          max_tokens: 4000,
         },
         {
           headers: {
             Authorization: `Bearer ${this.openRouterKey}`,
             'Content-Type': 'application/json',
+            // OpenRouter recommends these for free-tier rate limiting / attribution
+            'HTTP-Referer': process.env.APP_URL || 'https://localhost',
+            'X-Title': 'Daily JLPT Learning',
           },
           timeout: 60000,
         },
@@ -44,7 +49,7 @@ export class DailyLearningService {
     }
   }
 
-  /// 🔥 FALLBACK: Gemini with retry on 503
+  /// 🔥 FALLBACK: Gemini with retry on 503 AND 429 (rate/quota related)
   private async callGemini(prompt: string, attempt = 1): Promise<any> {
     try {
       return await axios.post(
@@ -53,17 +58,21 @@ export class DailyLearningService {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             response_mime_type: 'application/json',
-            maxOutputTokens: 4000, // 🔥 REDUCED: cap Gemini output too
+            maxOutputTokens: 4000,
           },
         },
         { timeout: 60000 },
       );
     } catch (error) {
       const status = error.response?.status;
-      // Retry up to 3 times on 503 with exponential backoff
-      if (status === 503 && attempt < 3) {
+
+      // Retry on 503 (overloaded) and 429 (rate limited / quota) with backoff.
+      // NOTE: a 429 with limit:0 in the message means the key has NO free-tier
+      // quota allocated at all (billing/region issue) — retries won't fix that,
+      // but we still back off in case it's a transient burst limit instead.
+      if ((status === 503 || status === 429) && attempt < 3) {
         const delay = attempt * 5000; // 5s, 10s
-        console.warn(`⚠️ Gemini 503, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
+        console.warn(`⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
         await new Promise((res) => setTimeout(res, delay));
         return this.callGemini(prompt, attempt + 1);
       }
@@ -123,12 +132,11 @@ export class DailyLearningService {
       if (d.tip && usedTips.size < 20) usedTips.add(d.tip);
     }
 
-    // 🔥 REDUCED list sizes to cut prompt tokens
     const usedWordsList = Array.from(usedWords).slice(0, 30).join(',');
     const usedKanjiList = Array.from(usedKanji).slice(0, 30).join(',');
     const usedTipsList = Array.from(usedTips).slice(0, 5).join('|');
 
-    /// 🔥 4. COMPACT PROMPT (reduced ~60% token size vs original)
+    /// 🔥 4. COMPACT PROMPT
     const prompt = `Date:${today} Seed:${randomSeed}
 
 Generate JLPT N5 Japanese daily learning content as JSON only. No markdown. No explanation.
@@ -213,15 +221,12 @@ EXAMPLE QUIZ ITEM:
       }
 
       /// 🔥 8. FILTER + VALIDATE
-
-      // N5 only
       parsed.vocabulary = parsed.vocabulary.filter(
         (v: any) => v.level === 'N5' && v.word && v.word.length <= 6,
       );
       parsed.kanji = parsed.kanji.filter((k: any) => k.level === 'N5');
       parsed.grammar = parsed.grammar.filter((g: any) => g.level === 'N5');
 
-      // Remove duplicates
       parsed.vocabulary = parsed.vocabulary.filter(
         (v: any) => !usedWords.has(v.word),
       );
@@ -229,12 +234,10 @@ EXAMPLE QUIZ ITEM:
         (k: any) => !usedKanji.has(k.kanji),
       );
 
-      // Tip dedup
       if (usedTips.has(parsed.tip)) {
         parsed.tip = 'Consistency is key. Keep learning every day 💪';
       }
 
-      // Minimum content check
       if (
         parsed.vocabulary.length < 5 ||
         parsed.kanji.length < 5 ||
@@ -296,7 +299,25 @@ EXAMPLE QUIZ ITEM:
       }
       console.error('❌ Daily Learning Error:', error.message);
 
-      // Return safe fallback so app doesn't crash
+      // 🔥 10. BOTH PROVIDERS FAILED — fall back to the most recent DB entry
+      // instead of returning an empty payload, so the app still shows real
+      // content to the user.
+      const lastGood = await this.prisma.dailyLearning.findFirst({
+        orderBy: { date: 'desc' },
+      });
+
+      if (lastGood) {
+        console.warn(`⚠️ Serving cached content from ${lastGood.date} as fallback`);
+        return {
+          ...lastGood,
+          date: today,
+          isFallback: true,
+          fallbackFromDate: lastGood.date,
+        };
+      }
+
+      // No AI response AND nothing in the DB at all — last resort only.
+      console.error('❌ No AI response and no cached DB content available');
       return {
         date: today,
         tip: 'Consistency beats intensity. Study a little every day! 💪',
@@ -304,6 +325,7 @@ EXAMPLE QUIZ ITEM:
         grammar: [],
         kanji: [],
         quiz: [],
+        isFallback: true,
       };
     }
   }
