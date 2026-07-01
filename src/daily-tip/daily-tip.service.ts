@@ -200,21 +200,60 @@ EXAMPLE QUIZ ITEM:
 
     try {
       /// 🔥 5. TRY DEEPSEEK FIRST
-      try {
-        const response = await this.callDeepSeek(prompt);
-        text = response.data?.choices?.[0]?.message?.content;
-        console.log('✅ DeepSeek response received');
-      } catch (deepseekError) {
-        const status = deepseekError.response?.status;
-        if (status === 402) {
-          console.warn('⚠️ DeepSeek out of credits (402), switching to Gemini...');
-        } else {
-          console.warn('⚠️ DeepSeek failed, switching to Gemini...');
-        }
-        const response = await this.callGemini(prompt);
-        text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        console.log('✅ Gemini fallback response received');
-      }
+/// 🔥 5. TRY OPENROUTER FIRST
+try {
+const response = await this.callDeepSeek(prompt);
+
+  console.log(
+    '🟢 OpenRouter Response:',
+    JSON.stringify(response.data, null, 2),
+  );
+
+  const choice = response.data?.choices?.[0];
+
+  if (!choice) {
+    throw new Error('No choices returned from OpenRouter');
+  }
+
+  if (typeof choice.message?.content === 'string') {
+    text = choice.message.content;
+  } else if (Array.isArray(choice.message?.content)) {
+    text = choice.message.content
+      .map((part: any) => part.text || '')
+      .join('');
+  } else if (typeof choice.text === 'string') {
+    text = choice.text;
+  } else if (typeof choice.content === 'string') {
+    text = choice.content;
+  }
+
+  if (!text || text.trim() === '') {
+    throw new Error(
+      `OpenRouter returned empty content.\n${JSON.stringify(
+        response.data,
+        null,
+        2,
+      )}`,
+    );
+  }
+
+  console.log('✅ OpenRouter response received');
+} catch (openRouterError: any) {
+  const status = openRouterError.response?.status;
+
+  if (status === 402) {
+    console.warn('⚠️ OpenRouter credits exhausted, switching to Gemini...');
+  } else {
+    console.warn('⚠️ OpenRouter failed, switching to Gemini...');
+  }
+
+  const response = await this.callGemini(prompt);
+
+  text =
+    response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+  console.log('✅ Gemini response received');
+}
 
       if (!text) throw new Error('Empty AI response');
 
