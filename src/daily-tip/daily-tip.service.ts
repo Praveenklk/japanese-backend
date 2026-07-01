@@ -16,10 +16,16 @@ export class DailyLearningService {
   // Any single free model can also get upstream-rate-limited (e.g. Venice
   // 429 on llama-3.3-70b) independent of your own OpenRouter quota, so we
   // try a short list before giving up on OpenRouter entirely.
+  // NOTE: OpenRouter's free catalog rotates — models get renamed or pulled
+  // without much notice (deepseek-chat-v3-0324:free was removed and
+  // replaced by deepseek-r1-0528, a reasoning model, which is why it's not
+  // listed here). Check https://openrouter.ai/models?q=free periodically
+  // and swap out any entries that start 404ing.
   private readonly FREE_MODELS = [
     'meta-llama/llama-3.3-70b-instruct:free',
-    'deepseek/deepseek-chat-v3-0324:free',
     'qwen/qwen-2.5-72b-instruct:free',
+    'mistralai/mistral-small-3.1-24b-instruct:free',
+    'meta-llama/llama-4-scout:free',
   ];
 
   // 🔥 In-memory lock so two concurrent requests (e.g. overlapping web
@@ -80,9 +86,11 @@ export class DailyLearningService {
         console.error(`❌ OpenRouter model failed: ${model} (status ${status})`);
         console.error('Detail:', raw);
 
-        // 402 (out of credits) and 429 (rate limited, ours or upstream
-        // provider's) both mean "try the next model in the list".
-        if (status === 402 || status === 429 || status === 503) {
+        // 402 (out of credits), 429 (rate limited, ours or upstream
+        // provider's), 503 (overloaded), and 404 (model ID no longer exists
+        // — OpenRouter's free catalog rotates fairly often) all mean "try
+        // the next model in the list" rather than aborting the whole chain.
+        if (status === 402 || status === 429 || status === 503 || status === 404) {
           continue;
         }
         // Anything else (auth error, malformed request, etc.) is unlikely
