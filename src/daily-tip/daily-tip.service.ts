@@ -18,92 +18,74 @@ export class DailyLearningService {
       throw new Error('Missing OPENROUTER_API_KEY.');
     }
 
-try {
-  return await axios.post(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      model: 'openrouter/free', // Automatically selects an available free model
-      messages: [
+    try {
+      return await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
         {
-          role: 'user',
-          content: prompt,
+          // 🔥 Pin to a specific non-reasoning instruct model.
+          // Do NOT use 'openrouter/free' (the auto-router) — it can hand you
+          // a reasoning model (nvidia/nemotron, poolside/laguna, etc.) which
+          // burns your entire max_tokens budget on internal "reasoning" text
+          // and returns finish_reason:"length" with content:null, before it
+          // ever writes the actual JSON.
+          model: 'meta-llama/llama-3.3-70b-instruct:free',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 4000, // needs headroom for 10 vocab + 10 kanji + 2 grammar + 20 quiz items
         },
-      ],
-      max_tokens: 1000,
-      temperature: 0.7,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${this.openRouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
-        'X-Title': 'Daily JLPT Learning',
-      },
-      timeout: 60000,
-    },
-  );
-} catch (error) {
-  console.error('❌ OpenRouter failed');
-
-  if (axios.isAxiosError(error) && error.response) {
-    console.error('Status:', error.response.status);
-    console.error('Data:', JSON.stringify(error.response.data));
-  } else if (error instanceof Error) {
-    console.error('Error:', error.message);
+        {
+          headers: {
+            Authorization: `Bearer ${this.openRouterKey}`,
+            'Content-Type': 'application/json',
+            // OpenRouter recommends these for free-tier rate limiting / attribution
+            'HTTP-Referer': process.env.APP_URL || 'https://localhost',
+            'X-Title': 'Daily JLPT Learning',
+          },
+          timeout: 60000,
+        },
+      );
+    } catch (error) {
+      console.error('❌ DeepSeek failed');
+      if (error.response) {
+        console.error('Status:', error.response.status);
+        console.error('Data:', JSON.stringify(error.response.data));
+      } else {
+        console.error('Error:', error.message);
+      }
+      throw error;
+    }
   }
-
-  throw error;
-}}
 
   /// 🔥 FALLBACK: Gemini with retry on 503 AND 429 (rate/quota related)
-private async callGemini(prompt: string, attempt = 1): Promise<any> {
-  try {
-    return await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
-      {
-        contents: [
-          {
-            parts: [{ text: prompt }],
+  private async callGemini(prompt: string, attempt = 1): Promise<any> {
+    try {
+      return await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiKey}`,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            response_mime_type: 'application/json',
+            maxOutputTokens: 4000,
           },
-        ],
-        generationConfig: {
-          response_mime_type: 'application/json',
-          maxOutputTokens: 1000,
-          temperature: 0.7,
         },
-      },
-      {
-        timeout: 60000,
-      },
-    );
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
+        { timeout: 60000 },
+      );
+    } catch (error) {
       const status = error.response?.status;
-      const message =
-        error.response?.data?.error?.message ?? error.message;
 
-      // Don't retry if the account has no quota.
-      if (status === 429 && message.includes('limit: 0')) {
-        console.error('❌ Gemini quota exhausted (limit: 0).');
-        throw error;
-      }
-
-      // Retry for temporary overloads or rate limits.
-      if ((status === 429 || status === 503) && attempt < 3) {
-        const delay = attempt * 5000;
-        console.warn(
-          `⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`,
-        );
-
-        await new Promise((resolve) => setTimeout(resolve, delay));
-
+      // Retry on 503 (overloaded) and 429 (rate limited / quota) with backoff.
+      // NOTE: a 429 with limit:0 in the message means the key has NO free-tier
+      // quota allocated at all (billing/region issue) — retries won't fix that,
+      // but we still back off in case it's a transient burst limit instead.
+      if ((status === 503 || status === 429) && attempt < 3) {
+        const delay = attempt * 5000; // 5s, 10s
+        console.warn(`⚠️ Gemini ${status}, retrying in ${delay / 1000}s (attempt ${attempt}/3)...`);
+        await new Promise((res) => setTimeout(res, delay));
         return this.callGemini(prompt, attempt + 1);
       }
+      throw error;
     }
-
-    throw error;
   }
-}
+
   @Cron('0 4 * * *', {
     timeZone: 'Asia/Kolkata',
   })
@@ -200,60 +182,21 @@ EXAMPLE QUIZ ITEM:
 
     try {
       /// 🔥 5. TRY DEEPSEEK FIRST
-/// 🔥 5. TRY OPENROUTER FIRST
-try {
-const response = await this.callDeepSeek(prompt);
-
-  console.log(
-    '🟢 OpenRouter Response:',
-    JSON.stringify(response.data, null, 2),
-  );
-
-  const choice = response.data?.choices?.[0];
-
-  if (!choice) {
-    throw new Error('No choices returned from OpenRouter');
-  }
-
-  if (typeof choice.message?.content === 'string') {
-    text = choice.message.content;
-  } else if (Array.isArray(choice.message?.content)) {
-    text = choice.message.content
-      .map((part: any) => part.text || '')
-      .join('');
-  } else if (typeof choice.text === 'string') {
-    text = choice.text;
-  } else if (typeof choice.content === 'string') {
-    text = choice.content;
-  }
-
-  if (!text || text.trim() === '') {
-    throw new Error(
-      `OpenRouter returned empty content.\n${JSON.stringify(
-        response.data,
-        null,
-        2,
-      )}`,
-    );
-  }
-
-  console.log('✅ OpenRouter response received');
-} catch (openRouterError: any) {
-  const status = openRouterError.response?.status;
-
-  if (status === 402) {
-    console.warn('⚠️ OpenRouter credits exhausted, switching to Gemini...');
-  } else {
-    console.warn('⚠️ OpenRouter failed, switching to Gemini...');
-  }
-
-  const response = await this.callGemini(prompt);
-
-  text =
-    response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-
-  console.log('✅ Gemini response received');
-}
+      try {
+        const response = await this.callDeepSeek(prompt);
+        text = response.data?.choices?.[0]?.message?.content;
+        console.log('✅ DeepSeek response received');
+      } catch (deepseekError) {
+        const status = deepseekError.response?.status;
+        if (status === 402) {
+          console.warn('⚠️ DeepSeek out of credits (402), switching to Gemini...');
+        } else {
+          console.warn('⚠️ DeepSeek failed, switching to Gemini...');
+        }
+        const response = await this.callGemini(prompt);
+        text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        console.log('✅ Gemini fallback response received');
+      }
 
       if (!text) throw new Error('Empty AI response');
 
