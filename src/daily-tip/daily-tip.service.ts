@@ -24,6 +24,12 @@ export class DailyLearningService {
   // up on OpenRouter and falling back to Gemini. Keeps latency bounded.
   private readonly MAX_MODEL_ATTEMPTS = 6;
 
+  // Small pause between model attempts. Free-tier OpenRouter keys share a
+  // single account-level rate limit across all models, so hammering 5-6
+  // different model IDs back-to-back can trip 429s that have nothing to do
+  // with any individual model's own capacity.
+  private readonly MODEL_ATTEMPT_DELAY_MS = 1500;
+
   // Absolute last resort, only used if the /models catalog fetch itself
   // fails AND we have no cached list at all (e.g. OpenRouter is down).
   // This is intentionally small — it's an emergency net, not the primary
@@ -35,6 +41,10 @@ export class DailyLearningService {
   ];
 
   constructor(private prisma: PrismaService) {}
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
 
   private getTodayInIST(): string {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -131,9 +141,43 @@ export class DailyLearningService {
   }
 
   /**
+   * Rough parameter-count estimate (in billions) parsed from the model id
+   * or name, used purely to rank capability — not a hard filter. Larger
+   * models tend to be more reliable at structured, multi-part JSON output
+   * than 1-3B "edge" models, so we prefer them when several free candidates
+   * are available.
+   */
+  private estimateModelSizeB(m: any): number {
+    const haystack = `${m.id ?? ''} ${m.name ?? ''}`.toLowerCase();
+
+    // MoE pattern like "8x7b" -> treat as 8 * 7 = 56B total params.
+    const moeMatch = haystack.match(/(\d+)x(\d+(?:\.\d+)?)b/);
+    if (moeMatch) {
+      return parseInt(moeMatch[1], 10) * parseFloat(moeMatch[2]);
+    }
+
+    // Plain size pattern like "70b", "3b", "1.2b".
+    const sizeMatch = haystack.match(/(\d+(?:\.\d+)?)b(?:[^a-z]|$)/);
+    if (sizeMatch) {
+      return parseFloat(sizeMatch[1]);
+    }
+
+    // No explicit size, but named like a lightweight/edge model.
+    if (/\b(mini|nano|tiny|small|edge)\b/.test(haystack)) {
+      return 1;
+    }
+
+    // Unknown size — treat as mid-tier so it's not penalized like a
+    // known-tiny model, but doesn't outrank known-large ones either.
+    return 8;
+  }
+
+  /**
    * Fetches OpenRouter's live model catalog and returns a filtered,
    * ranked list of free, non-reasoning, text-instruct model IDs.
    * Cached for MODEL_CACHE_TTL_MS to avoid hammering the endpoint.
+   * Ranked by estimated size first (bigger = generally more reliable at
+   * structured JSON output), then by context length as a tiebreaker.
    */
   private async getCandidateModels(): Promise<string[]> {
     const now = Date.now();
@@ -151,8 +195,11 @@ export class DailyLearningService {
         .filter(
           (m) => this.isFreeModel(m) && !this.isReasoningModel(m) && this.isUsableTextModel(m),
         )
-        // Prefer models with more context headroom as a rough capability proxy.
-        .sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
+        .sort((a, b) => {
+          const sizeDiff = this.estimateModelSizeB(b) - this.estimateModelSizeB(a);
+          if (sizeDiff !== 0) return sizeDiff;
+          return (b.context_length ?? 0) - (a.context_length ?? 0);
+        })
         .map((m) => m.id);
 
       if (filtered.length === 0) {
@@ -277,7 +324,15 @@ export class DailyLearningService {
     const models = (await this.getCandidateModels()).slice(0, this.MAX_MODEL_ATTEMPTS);
     let lastError: any = null;
 
-    for (const model of models) {
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+
+      // Space out attempts so we don't self-inflict rate limits — free-tier
+      // OpenRouter keys share one account-level limit across all models.
+      if (i > 0) {
+        await this.sleep(this.MODEL_ATTEMPT_DELAY_MS);
+      }
+
       try {
         console.log(`🔄 Trying OpenRouter model: ${model}`);
         const response = await this.callOpenRouter(prompt, model);
@@ -302,7 +357,15 @@ export class DailyLearningService {
       } catch (err: any) {
         lastError = err;
         const status = err.response?.status;
-        console.warn(`⚠️ Model ${model} failed (${status ?? err.message}), trying next...`);
+
+        if (status === 429) {
+          console.warn(
+            `⚠️ Model ${model} rate-limited (429):`,
+            JSON.stringify(err.response?.data ?? {}),
+          );
+        } else {
+          console.warn(`⚠️ Model ${model} failed (${status ?? err.message}), trying next...`);
+        }
         continue;
       }
     }
