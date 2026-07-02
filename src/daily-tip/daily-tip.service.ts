@@ -8,15 +8,31 @@ export class DailyLearningService {
   private readonly openRouterKey = process.env.OPENROUTER_API_KEY;
   private readonly geminiKey = process.env.GEMINI_API_KEY;
 
-  // Use OpenRouter's free router instead of hardcoded free model slugs.
-  // OpenRouter says this router automatically selects an available free model.
-  private readonly OPENROUTER_MODEL = 'openrouter/free';
-
   // In-memory lock so overlapping requests share one generation attempt.
   private inFlight: Promise<any> | null = null;
 
   // Circuit breaker for Gemini when quota is confirmed dead.
   private geminiQuotaDead = false;
+
+  // Cache of the filtered "free, non-reasoning, instruct-capable" model list
+  // pulled from OpenRouter's live catalog, so we don't hit /models on every
+  // single generation call.
+  private modelListCache: { models: string[]; fetchedAt: number } | null = null;
+  private readonly MODEL_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+  // How many candidate models to actually try per generation before giving
+  // up on OpenRouter and falling back to Gemini. Keeps latency bounded.
+  private readonly MAX_MODEL_ATTEMPTS = 6;
+
+  // Absolute last resort, only used if the /models catalog fetch itself
+  // fails AND we have no cached list at all (e.g. OpenRouter is down).
+  // This is intentionally small — it's an emergency net, not the primary
+  // selection strategy.
+  private readonly FALLBACK_MODELS = [
+    'meta-llama/llama-3.3-70b-instruct:free',
+    'mistralai/mistral-7b-instruct:free',
+    'google/gemma-2-9b-it:free',
+  ];
 
   constructor(private prisma: PrismaService) {}
 
@@ -39,70 +55,166 @@ export class DailyLearningService {
     return `${year}-${month}-${day}`;
   }
 
-private extractJsonObject(text: string): string {
-  const cleaned = text
-    .replace(/```json/g, '')
-    .replace(/```/g, '')
-    .trim();
+  private extractJsonObject(text: string): string {
+    const cleaned = text
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .trim();
 
-  if (
-    cleaned.startsWith('We need to') ||
-    cleaned.startsWith("Let's") ||
-    cleaned.startsWith('I need to')
-  ) {
-    throw new Error('AI returned reasoning instead of JSON.');
+    if (this.looksLikeReasoning(cleaned)) {
+      throw new Error('AI returned reasoning instead of JSON.');
+    }
+
+    const first = cleaned.indexOf('{');
+    const last = cleaned.lastIndexOf('}');
+
+    if (first === -1 || last === -1) {
+      throw new Error('No JSON object found.');
+    }
+
+    return cleaned.substring(first, last + 1);
   }
 
-  const first = cleaned.indexOf('{');
-  const last = cleaned.lastIndexOf('}');
-
-  if (first === -1 || last === -1) {
-    throw new Error('No JSON object found.');
+  private looksLikeReasoning(text: string): boolean {
+    return (
+      text.startsWith('We need to') ||
+      text.startsWith("Let's") ||
+      text.startsWith('I need to') ||
+      text.startsWith('First,') ||
+      text.includes('reasoning')
+    );
   }
 
-  return cleaned.substring(first, last + 1);
-}
+  // ---------------------------------------------------------------------
+  // Dynamic OpenRouter model discovery
+  // ---------------------------------------------------------------------
 
-private async callOpenRouter(prompt: string) {
-  if (!this.openRouterKey) {
-    throw new Error('Missing OPENROUTER_API_KEY.');
+  private isFreeModel(m: any): boolean {
+    if (typeof m.id === 'string' && m.id.endsWith(':free')) return true;
+    const prompt = m.pricing?.prompt;
+    const completion = m.pricing?.completion;
+    return prompt === '0' && completion === '0';
   }
 
-  return axios.post(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      model: this.OPENROUTER_MODEL,
+  private isReasoningModel(m: any): boolean {
+    const haystack = `${m.id ?? ''} ${m.name ?? ''}`.toLowerCase();
+    const reasoningKeywords = [
+      'r1',
+      'qwq',
+      'thinking',
+      'reasoner',
+      'reasoning',
+      'o1-',
+      '-o1',
+      'o3-',
+      '-o3',
+      'o4-mini',
+    ];
+    if (reasoningKeywords.some((kw) => haystack.includes(kw))) return true;
 
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a JSON API. Return ONLY valid JSON. Never explain. Never think aloud. Never include markdown.',
+    const supportedParams: string[] = m.supported_parameters ?? [];
+    if (
+      supportedParams.includes('reasoning') ||
+      supportedParams.includes('include_reasoning')
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private isUsableTextModel(m: any): boolean {
+    const modality = m.architecture?.modality;
+    const isText = typeof modality === 'string' ? modality.includes('text->text') : true;
+    const hasEnoughContext = (m.context_length ?? 0) >= 4000;
+    return isText && hasEnoughContext;
+  }
+
+  /**
+   * Fetches OpenRouter's live model catalog and returns a filtered,
+   * ranked list of free, non-reasoning, text-instruct model IDs.
+   * Cached for MODEL_CACHE_TTL_MS to avoid hammering the endpoint.
+   */
+  private async getCandidateModels(): Promise<string[]> {
+    const now = Date.now();
+    if (this.modelListCache && now - this.modelListCache.fetchedAt < this.MODEL_CACHE_TTL_MS) {
+      return this.modelListCache.models;
+    }
+
+    try {
+      const response = await axios.get('https://openrouter.ai/api/v1/models', {
+        timeout: 15000,
+      });
+      const allModels: any[] = response.data?.data ?? [];
+
+      const filtered = allModels
+        .filter(
+          (m) => this.isFreeModel(m) && !this.isReasoningModel(m) && this.isUsableTextModel(m),
+        )
+        // Prefer models with more context headroom as a rough capability proxy.
+        .sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
+        .map((m) => m.id);
+
+      if (filtered.length === 0) {
+        throw new Error('No free, non-reasoning models found in OpenRouter catalog.');
+      }
+
+      console.log(`✅ Found ${filtered.length} free non-reasoning OpenRouter models`);
+      this.modelListCache = { models: filtered, fetchedAt: now };
+      return filtered;
+    } catch (error: any) {
+      console.error('❌ Failed to fetch OpenRouter model catalog:', error.message);
+
+      if (this.modelListCache) {
+        console.warn('⚠️ Using stale cached OpenRouter model list.');
+        return this.modelListCache.models;
+      }
+
+      console.warn('⚠️ Falling back to hardcoded emergency model list.');
+      return this.FALLBACK_MODELS;
+    }
+  }
+
+  private async callOpenRouter(prompt: string, model: string) {
+    if (!this.openRouterKey) {
+      throw new Error('Missing OPENROUTER_API_KEY.');
+    }
+
+    return axios.post(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        model,
+
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a JSON API. Return ONLY valid JSON. Never explain. Never think aloud. Never include markdown.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+
+        temperature: 0.2,
+        max_tokens: 4000,
+
+        response_format: {
+          type: 'json_object',
         },
-        {
-          role: 'user',
-          content: prompt,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${this.openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'https://localhost',
+          'X-Title': 'Daily JLPT Learning',
         },
-      ],
-
-      temperature: 0.2,
-      max_tokens: 2500,
-
-      response_format: {
-        type: 'json_object',
+        timeout: 60000,
       },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${this.openRouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.APP_URL || 'https://localhost',
-        'X-Title': 'Daily JLPT Learning',
-      },
-      timeout: 60000,
-    },
-  );
-}
+    );
+  }
 
   private async callGemini(prompt: string, attempt = 1): Promise<any> {
     if (this.geminiQuotaDead) {
@@ -120,7 +232,7 @@ private async callOpenRouter(prompt: string) {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             response_mime_type: 'application/json',
-            maxOutputTokens: 2500,
+            maxOutputTokens: 4000,
           },
         },
         { timeout: 60000 },
@@ -146,66 +258,70 @@ private async callOpenRouter(prompt: string) {
     }
   }
 
-private async callAi(prompt: string): Promise<string> {
-  try {
-    const response = await this.callOpenRouter(prompt);
-
-    const choice = response.data?.choices?.[0];
-
-    if (!choice) {
-      throw new Error('No choices returned from OpenRouter');
-    }
-
-    console.log('OpenRouter Choice:');
-    console.log(JSON.stringify(choice, null, 2));
-
-    let text = '';
-
-    const content = choice.message?.content;
+  private extractTextFromChoice(choice: any): string {
+    const content = choice?.message?.content;
 
     if (typeof content === 'string') {
-      text = content;
-    } else if (Array.isArray(content)) {
-      text = content
+      return content.trim();
+    }
+    if (Array.isArray(content)) {
+      return content
         .map((p: any) => p.text ?? '')
-        .join('');
+        .join('')
+        .trim();
     }
-
-    text = text.trim();
-
-    if (!text) {
-      throw new Error('Model returned empty content.');
-    }
-
-    // Reject reasoning responses
-    if (
-      text.startsWith('We need to') ||
-      text.startsWith("Let's") ||
-      text.startsWith('I need to') ||
-      text.startsWith('First,') ||
-      text.includes('reasoning')
-    ) {
-      throw new Error('Model returned reasoning instead of JSON.');
-    }
-
-    console.log('✅ OpenRouter JSON received');
-
-    return text;
-  } catch (openRouterError: any) {
-    console.warn('⚠️ OpenRouter failed, switching to Gemini...');
-
-    const response = await this.callGemini(prompt);
-
-    const text =
-      response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-
-    if (!text.trim()) {
-      throw new Error('Gemini returned empty response.');
-    }
-
-    return text;
+    return '';
   }
-}
+
+  private async callAi(prompt: string): Promise<string> {
+    const models = (await this.getCandidateModels()).slice(0, this.MAX_MODEL_ATTEMPTS);
+    let lastError: any = null;
+
+    for (const model of models) {
+      try {
+        console.log(`🔄 Trying OpenRouter model: ${model}`);
+        const response = await this.callOpenRouter(prompt, model);
+        const choice = response.data?.choices?.[0];
+
+        if (!choice) {
+          throw new Error('No choices returned from OpenRouter');
+        }
+
+        const text = this.extractTextFromChoice(choice);
+
+        if (!text) {
+          throw new Error('Model returned empty content.');
+        }
+
+        if (this.looksLikeReasoning(text)) {
+          throw new Error(`Model ${model} returned reasoning instead of JSON.`);
+        }
+
+        console.log(`✅ JSON received from ${model}`);
+        return text;
+      } catch (err: any) {
+        lastError = err;
+        const status = err.response?.status;
+        console.warn(`⚠️ Model ${model} failed (${status ?? err.message}), trying next...`);
+        continue;
+      }
+    }
+
+    console.warn('⚠️ All OpenRouter models failed, switching to Gemini...');
+
+    try {
+      const response = await this.callGemini(prompt);
+      const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+      if (!text.trim()) {
+        throw new Error('Gemini returned empty response.');
+      }
+
+      return text;
+    } catch (geminiError: any) {
+      throw lastError ?? geminiError;
+    }
+  }
 
   @Cron('0 4 * * *', {
     timeZone: 'Asia/Kolkata',
