@@ -39,46 +39,70 @@ export class DailyLearningService {
     return `${year}-${month}-${day}`;
   }
 
-  private extractJsonObject(text: string): string {
-    const cleaned = text
-      .trim()
-      .replace(/^```json\s*/i, '')
-      .replace(/^```\s*/i, '')
-      .replace(/\s*```$/i, '');
+private extractJsonObject(text: string): string {
+  const cleaned = text
+    .replace(/```json/g, '')
+    .replace(/```/g, '')
+    .trim();
 
-    const first = cleaned.indexOf('{');
-    const last = cleaned.lastIndexOf('}');
-
-    if (first === -1 || last === -1 || last <= first) {
-      throw new Error('Invalid JSON format — no JSON object found');
-    }
-
-    return cleaned.slice(first, last + 1);
+  if (
+    cleaned.startsWith('We need to') ||
+    cleaned.startsWith("Let's") ||
+    cleaned.startsWith('I need to')
+  ) {
+    throw new Error('AI returned reasoning instead of JSON.');
   }
 
-  private async callOpenRouter(prompt: string) {
-    if (!this.openRouterKey) {
-      throw new Error('Missing OPENROUTER_API_KEY.');
-    }
+  const first = cleaned.indexOf('{');
+  const last = cleaned.lastIndexOf('}');
 
-    return axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: this.OPENROUTER_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 2500,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${this.openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.APP_URL || 'https://localhost',
-          'X-Title': 'Daily JLPT Learning',
+  if (first === -1 || last === -1) {
+    throw new Error('No JSON object found.');
+  }
+
+  return cleaned.substring(first, last + 1);
+}
+
+private async callOpenRouter(prompt: string) {
+  if (!this.openRouterKey) {
+    throw new Error('Missing OPENROUTER_API_KEY.');
+  }
+
+  return axios.post(
+    'https://openrouter.ai/api/v1/chat/completions',
+    {
+      model: this.OPENROUTER_MODEL,
+
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a JSON API. Return ONLY valid JSON. Never explain. Never think aloud. Never include markdown.',
         },
-        timeout: 60000,
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+
+      temperature: 0.2,
+      max_tokens: 2500,
+
+      response_format: {
+        type: 'json_object',
       },
-    );
-  }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${this.openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'https://localhost',
+        'X-Title': 'Daily JLPT Learning',
+      },
+      timeout: 60000,
+    },
+  );
+}
 
   private async callGemini(prompt: string, attempt = 1): Promise<any> {
     if (this.geminiQuotaDead) {
@@ -122,52 +146,66 @@ export class DailyLearningService {
     }
   }
 
-  private async callAi(prompt: string) {
-    try {
-      const response = await this.callOpenRouter(prompt);
-      const choice = response.data?.choices?.[0];
+private async callAi(prompt: string): Promise<string> {
+  try {
+    const response = await this.callOpenRouter(prompt);
 
-      if (!choice) {
-        throw new Error('No choices returned from OpenRouter');
-      }
+    const choice = response.data?.choices?.[0];
 
-      let text: string | undefined;
-
-      if (typeof choice.message?.content === 'string') {
-        text = choice.message.content;
-      } else if (Array.isArray(choice.message?.content)) {
-        text = choice.message.content.map((part: any) => part.text || '').join('');
-      }
-
-      if (!text || text.trim() === '') {
-        throw new Error(
-          `OpenRouter returned empty content (finish_reason: ${choice.finish_reason ?? 'unknown'})`,
-        );
-      }
-
-      console.log('✅ OpenRouter response received');
-      return text;
-    } catch (openRouterError: any) {
-      const status = openRouterError.response?.status;
-      const raw =
-        openRouterError.response?.data?.error?.metadata?.raw ||
-        openRouterError.response?.data?.error?.message ||
-        openRouterError.message;
-
-      console.warn(`⚠️ OpenRouter failed (status ${status}), switching to Gemini...`);
-      console.error('Detail:', raw);
-
-      const response = await this.callGemini(prompt);
-      const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!text || text.trim() === '') {
-        throw new Error('Gemini returned empty content');
-      }
-
-      console.log('✅ Gemini fallback response received');
-      return text;
+    if (!choice) {
+      throw new Error('No choices returned from OpenRouter');
     }
+
+    console.log('OpenRouter Choice:');
+    console.log(JSON.stringify(choice, null, 2));
+
+    let text = '';
+
+    const content = choice.message?.content;
+
+    if (typeof content === 'string') {
+      text = content;
+    } else if (Array.isArray(content)) {
+      text = content
+        .map((p: any) => p.text ?? '')
+        .join('');
+    }
+
+    text = text.trim();
+
+    if (!text) {
+      throw new Error('Model returned empty content.');
+    }
+
+    // Reject reasoning responses
+    if (
+      text.startsWith('We need to') ||
+      text.startsWith("Let's") ||
+      text.startsWith('I need to') ||
+      text.startsWith('First,') ||
+      text.includes('reasoning')
+    ) {
+      throw new Error('Model returned reasoning instead of JSON.');
+    }
+
+    console.log('✅ OpenRouter JSON received');
+
+    return text;
+  } catch (openRouterError: any) {
+    console.warn('⚠️ OpenRouter failed, switching to Gemini...');
+
+    const response = await this.callGemini(prompt);
+
+    const text =
+      response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+    if (!text.trim()) {
+      throw new Error('Gemini returned empty response.');
+    }
+
+    return text;
   }
+}
 
   @Cron('0 4 * * *', {
     timeZone: 'Asia/Kolkata',
